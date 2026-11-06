@@ -83,16 +83,6 @@ function requireLogin(): boolean {
   return false;
 }
 
-function protectedEmit(event: "back"): void;
-function protectedEmit(event: "correction" | "observe" | "openAnimal" | "likeMemory" | "lightCandle" | "toggleFavorite", value: string): void;
-function protectedEmit(event: "notify", value: string): void;
-function protectedEmit(event: "flowerComment", value: string, state: boolean): void;
-function protectedEmit(event: "likeObservation", animalId: string, observationId: string, state: boolean): void;
-function protectedEmit(event: "back" | "correction" | "observe" | "openAnimal" | "likeMemory" | "lightCandle" | "toggleFavorite" | "notify" | "flowerComment" | "likeObservation", ...args: any[]) {
-  if (!requireLogin()) return;
-  (emit as (...values: any[]) => void)(event, ...args);
-}
-
 const basicArchive = computed(() => [
   { label: "名字", value: props.animal.name, source: "官方来源" },
   {
@@ -182,16 +172,15 @@ const taxonomyTree = computed(() => {
 });
 
 function toggleFollow() {
-  protectedEmit("toggleFavorite", props.animal.id);
+  emit("toggleFavorite", props.animal.id);
 }
 
 function shareAnimal() {
-  if (!requireLogin()) return;
   emit("share", props.animal.id);
 }
 
 function lightCandle() {
-  protectedEmit("lightCandle", props.animal.id);
+  emit("lightCandle", props.animal.id);
 }
 
 function addComment() {
@@ -206,7 +195,6 @@ function addComment() {
 }
 
 function offerFlower(commentId: string) {
-  if (!requireLogin()) return;
   const comment = props.comments.find((item) => item.id === commentId);
   if (comment) emit("flowerComment", commentId, !comment.hasFlowered);
 }
@@ -229,12 +217,11 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
         :alt="animal.name"
       />
       <view class="hero__actions">
-        <button aria-label="返回" @click="protectedEmit('back')"><UiImageIcon name="back" :size="20" tone="dark" /></button>
+        <button aria-label="返回" @click="emit('back')"><UiImageIcon name="back" :size="20" tone="dark" /></button>
         <view>
           <button aria-label="收藏" :class="{ active: favorited }" @click="toggleFollow"><UiImageIcon name="favorite" :size="19" :tone="favorited ? 'active' : 'dark'" /></button>
-          <button v-if="loggedIn" aria-label="分享当前档案" open-type="share" @click="shareAnimal"><UiImageIcon name="share" :size="18" tone="dark" /></button>
-          <button v-else aria-label="登录后分享当前档案" @click="shareAnimal"><UiImageIcon name="share" :size="18" tone="dark" /></button>
-          <button aria-label="纠错" @click="protectedEmit('correction', animal.id)"><AhangIcon name="edit" :size="18" /></button>
+          <button aria-label="分享当前档案" open-type="share" @click="shareAnimal"><UiImageIcon name="share" :size="18" tone="dark" /></button>
+          <button aria-label="纠错" @click="emit('correction', animal.id)"><AhangIcon name="edit" :size="18" /></button>
         </view>
       </view>
       <view class="hero__identity">
@@ -301,7 +288,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
             v-for="filter in observationFilters"
             :key="filter.id"
             :class="{ active: observationFilter === filter.id }"
-            @click="requireLogin() && (observationFilter = filter.id)"
+            @click="observationFilter = filter.id"
           >
             {{ filter.label }}
           </button>
@@ -320,8 +307,8 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
           <text class="observation-card__copy">{{ observation.text }}</text>
           <image v-if="observation.image" class="observation-card__image" :src="observation.image" mode="aspectFill" />
           <view class="observation-card__actions">
-            <button @click="protectedEmit('likeObservation', animal.id, observation.id, !observation.hasLiked)"><AhangIcon name="like" :size="15" /> {{ observation.likes }}</button>
-            <button @click="protectedEmit('notify', '评论模块已唤醒，请在下个迭代继续体验')"><AhangIcon name="comment" :size="15" /> {{ observation.commentsCount }}</button>
+            <button @click="emit('likeObservation', animal.id, observation.id, !observation.hasLiked)"><AhangIcon name="like" :size="15" /> {{ observation.likes }}</button>
+            <button @click="emit('notify', '评论模块已唤醒，请在下个迭代继续体验')"><AhangIcon name="comment" :size="15" /> {{ observation.commentsCount }}</button>
           </view>
         </view>
       </view>
@@ -329,10 +316,10 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
         <text>暂无日常观察记录</text>
         <text>欢迎各位观察员上传此动物的相关日常习性观察日志。</text>
       </view>
-      <button class="primary-button primary-button--green" @click="protectedEmit('observe', animal.id)">上传一次观察</button>
+      <button class="primary-button primary-button--green" @click="emit('observe', animal.id)">上传一次观察</button>
     </view>
 
-    <view class="detail-section memory-section">
+    <view v-if="animal.status === 'deceased'" class="detail-section memory-section">
       <view class="memory-heading">
         <text>🕯️</text>
         <view><text>公众回忆 (Public Memories)</text><text>COMMUNITY REMEMBRANCE</text></view>
@@ -345,7 +332,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
           </view>
           <text class="memory-item__copy">{{ memory.text }}</text>
           <image v-if="memory.image" class="memory-item__image" :src="memory.image" mode="aspectFill" />
-          <button :class="{ active: memory.hasLiked }" @click="protectedEmit('likeMemory', memory.id)"><AhangIcon name="heart" :size="15" /> {{ memory.likes }}</button>
+          <button :class="{ active: memory.hasLiked }" @click="emit('likeMemory', memory.id)"><AhangIcon name="heart" :size="15" /> {{ memory.likes }}</button>
         </view>
       </view>
       <view v-else class="empty-copy">
@@ -354,7 +341,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
       </view>
     </view>
 
-    <view class="detail-section memorial-section">
+    <view v-if="animal.status === 'deceased'" class="detail-section memorial-section">
       <view class="section-title"><text>🕯️</text><text>纪念它</text></view>
       <text class="memorial-intro">每一句留言、每一朵花和每一盏烛光，都让它继续被记得。</text>
       <view class="candle-card">
@@ -385,7 +372,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
         <view><text>当前</text><text>{{ animal.name }}</text><text>{{ animal.commonName || animal.species }}</text></view>
       </view>
       <view class="relationship-label"><text>{{ relationshipLabel }}</text><text>🌿 {{ relationshipDescription }}</text></view>
-      <button class="relationship-target" @click="protectedEmit('openAnimal', relatedAnimal.id)">
+      <button class="relationship-target" @click="emit('openAnimal', relatedAnimal.id)">
         <AnimalImage :species="relatedAnimal.species" :src="relatedAnimal.image || relatedAnimal.coverUrl" :alt="relatedAnimal.name" />
         <view><text>{{ relatedAnimal.name }}</text><text>{{ relatedAnimal.commonName || relatedAnimal.species }}</text></view>
         <text>查看档案 ›</text>
@@ -435,7 +422,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
           <button
             v-for="node in taxonomyTree"
             :key="node.label"
-            @click="protectedEmit('notify', `【${node.label}】${node.name} - 系统发育学知识树页面研发中`)"
+            @click="emit('notify', `【${node.label}】${node.name} - 系统发育学知识树页面研发中`)"
           >
             <text :class="[`primary-${node.primary || 'plain'}`]">{{ node.symbol }}</text>
             <view><view class="taxonomy-node__name"><text>{{ node.name }}</text><text>({{ node.label }})</text></view><text>{{ node.description }}</text></view>

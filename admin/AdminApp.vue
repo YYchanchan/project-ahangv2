@@ -10,12 +10,14 @@ type SubmissionStatus = "pending" | "approved" | "need_supplement" | "rejected";
 interface LoginResponse { token: string; user: User }
 interface Submission {
   id: string;
+  userId: string;
   submitterName: string;
   type: SubmissionType;
   animalId?: string;
   animalName: string;
   title: string;
   details: string;
+  payload: Record<string, unknown>;
   mediaUrl?: string;
   source?: string;
   copyright?: string;
@@ -23,9 +25,19 @@ interface Submission {
   statusLabel: string;
   adminComment: string;
   submittedAt: string;
+  reviewedAt?: string;
+  reviewerName?: string;
 }
 interface Stats { pending: number; today: number; approvedThisMonth: number; animalCount: number }
 interface ReviewLog { id: string; operator: string; action: string; targetType: string; targetId: string; createdAt: string }
+interface LogDetailField { label: string; value: string }
+interface LogTargetDetail {
+  title: string;
+  description?: string;
+  imageUrl?: string;
+  fields: LogDetailField[];
+  payloadEntries?: Array<{ key: string; label: string; value: string }>;
+}
 
 const TOKEN_KEY = "ahang_admin_token";
 const currentUser = ref<User | null>(null);
@@ -47,8 +59,15 @@ const search = ref("");
 const typeFilter = ref<SubmissionType | "all">("all");
 const statusFilter = ref<SubmissionStatus | "all">("pending");
 const reviewTarget = ref<Submission | null>(null);
+const selectedLog = ref<ReviewLog | null>(null);
+const editingApprovedSubmission = ref<Submission | null>(null);
+const approvedPayloadText = ref("");
+const approvedEditError = ref("");
+const approvedEditSaving = ref(false);
 const reviewDecision = ref<Exclude<SubmissionStatus, "pending">>("approved");
 const reviewComment = ref("");
+const reviewError = ref("");
+const reviewSubmitting = ref(false);
 const editingAnimal = ref<Animal | null>(null);
 const editingSpecies = ref<Species | null>(null);
 const editingMemory = ref<PublicMemoryRecord | null>(null);
@@ -75,6 +94,169 @@ const typeLabels: Record<SubmissionType, string> = {
   archive: "历史资料",
   task: "协作任务",
 };
+
+const reviewDecisionOptions: Array<{
+  value: Exclude<SubmissionStatus, "pending">;
+  label: string;
+  description: string;
+}> = [
+  { value: "approved", label: "审核通过", description: "通过后发布到用户端公开页面" },
+  { value: "need_supplement", label: "要求补充", description: "反馈给提交者，等待补充材料" },
+  { value: "rejected", label: "退回内容", description: "不予公开，并说明退回原因" },
+];
+
+const payloadLabels: Record<string, string> = {
+  dateTime: "观察时间",
+  location: "观察地点",
+  behaviors: "行为标签",
+  description: "补充说明",
+  animal: "推荐档案资料",
+  citation: "引用或佐证",
+  date: "资料日期",
+  field: "纠错字段",
+  evidence: "纠错依据",
+  expectedInfo: "希望获得的资料",
+  rewardLabel: "协作奖励说明",
+  taskId: "协作任务 ID",
+  taskTitle: "协作任务标题",
+};
+
+function toPayloadEntries(payload: Record<string, unknown> = {}) {
+  return Object.entries(payload).map(([key, value]) => ({
+  key,
+  label: payloadLabels[key] || key,
+  value: typeof value === "string"
+    ? value
+    : Array.isArray(value)
+      ? value.join("、")
+      : JSON.stringify(value, null, 2),
+  }));
+}
+
+const reviewPayloadEntries = computed(() => toPayloadEntries(reviewTarget.value?.payload));
+
+const logTargetTypeLabels: Record<string, string> = {
+  submission: "用户投稿",
+  animal: "动物档案",
+  species: "物种知识",
+  memory: "公众回忆",
+  task: "协作任务",
+  user: "用户账号",
+};
+
+const selectedLogSubmission = computed(() =>
+  selectedLog.value?.targetType === "submission"
+    ? submissions.value.find((item) => item.id === selectedLog.value?.targetId) || null
+    : null,
+);
+
+const selectedLogDetail = computed<LogTargetDetail | null>(() => {
+  const log = selectedLog.value;
+  if (!log) return null;
+
+  if (log.targetType === "submission") {
+    const item = submissions.value.find((entry) => entry.id === log.targetId);
+    return item ? {
+      title: item.title,
+      description: item.details,
+      imageUrl: item.mediaUrl,
+      fields: [
+        { label: "投稿类型", value: typeLabels[item.type] },
+        { label: "提交者", value: `${item.submitterName}（${item.userId}）` },
+        { label: "关联动物", value: item.animalName || item.animalId || "未绑定档案" },
+        { label: "当前状态", value: item.statusLabel },
+        { label: "提交时间", value: formatTime(item.submittedAt) },
+        { label: "审核时间", value: item.reviewedAt ? formatTime(item.reviewedAt) : "尚未审核" },
+        { label: "版权与授权", value: item.copyright || "未填写" },
+        { label: "资料来源", value: item.source || "未填写" },
+        { label: "审核反馈", value: item.adminComment || "暂无反馈" },
+      ],
+      payloadEntries: toPayloadEntries(item.payload),
+    } : null;
+  }
+
+  if (log.targetType === "animal") {
+    const item = animals.value.find((entry) => entry.id === log.targetId);
+    return item ? {
+      title: item.name,
+      description: item.description || item.summary,
+      imageUrl: item.image,
+      fields: [
+        { label: "物种", value: item.species },
+        { label: "状态", value: item.statusLabel },
+        { label: "机构", value: item.institution || "未填写" },
+        { label: "城市", value: item.city || "未填写" },
+        { label: "学名", value: item.scientificName || "未填写" },
+        { label: "观察记录", value: `${item.recordCount || item.observations.length} 条` },
+      ],
+    } : null;
+  }
+
+  if (log.targetType === "species") {
+    const item = species.value.find((entry) => entry.id === log.targetId);
+    return item ? {
+      title: item.biologicalProfile.chineseName,
+      description: item.basicInfo.habitat,
+      fields: [
+        { label: "英文名", value: item.biologicalProfile.englishName || "未填写" },
+        { label: "拉丁名", value: item.biologicalProfile.latinName || "未填写" },
+        { label: "食性", value: item.basicInfo.diet || "未填写" },
+        { label: "分布", value: item.basicInfo.distribution || "未填写" },
+        { label: "IUCN", value: item.basicInfo.iucnStatus || "未填写" },
+        { label: "CITES", value: item.basicInfo.citesStatus || "未填写" },
+      ],
+    } : null;
+  }
+
+  if (log.targetType === "memory") {
+    const item = memories.value.find((entry) => entry.id === log.targetId);
+    return item ? {
+      title: item.title,
+      description: item.text,
+      imageUrl: item.image,
+      fields: [
+        { label: "作者", value: item.author || "未填写" },
+        { label: "日期", value: item.date || "未填写" },
+        { label: "关联动物", value: item.animalIds.join("、") || "未关联" },
+        { label: "分类", value: item.categoryLabel || item.category },
+        { label: "点赞数", value: String(item.likes || 0) },
+      ],
+    } : null;
+  }
+
+  if (log.targetType === "task") {
+    const item = tasks.value.find((entry) => entry.id === log.targetId);
+    return item ? {
+      title: item.title,
+      description: item.description,
+      fields: [
+        { label: "关联动物", value: item.animalName || item.animalId || "不限" },
+        { label: "发起者", value: item.creatorName || "未填写" },
+        { label: "期望资料", value: item.expectedInfo || "未填写" },
+        { label: "任务回报", value: item.rewardLabel || "未填写" },
+        { label: "当前进度", value: item.progressText || "未填写" },
+        { label: "贡献数", value: String(item.contributionCount || 0) },
+      ],
+    } : null;
+  }
+
+  if (log.targetType === "user") {
+    const item = users.value.find((entry) => entry.id === log.targetId);
+    return item ? {
+      title: item.nickname,
+      imageUrl: item.avatarUrl,
+      fields: [
+        { label: "用户 ID", value: item.id },
+        { label: "角色", value: item.role },
+        { label: "状态", value: item.status },
+        { label: "注册时间", value: formatTime(item.createdAt) },
+        { label: "最近登录", value: item.lastLoginAt ? formatTime(item.lastLoginAt) : "暂无" },
+      ],
+    } : null;
+  }
+
+  return null;
+});
 
 const filteredSubmissions = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -245,31 +427,114 @@ function selectTab(id: TabId) {
   errorMessage.value = "";
 }
 
-function openReview(item: Submission, decision: Exclude<SubmissionStatus, "pending">) {
-  reviewTarget.value = item;
-  reviewDecision.value = decision;
-  reviewComment.value = decision === "approved"
+function defaultReviewComment(decision: Exclude<SubmissionStatus, "pending">): string {
+  return decision === "approved"
     ? "资料核验通过，现已公开。"
     : decision === "need_supplement"
       ? "请补充可核对的时间、地点、拍摄原图或公开来源。"
       : "资料不符合公开收录标准，已退回。";
 }
 
-async function submitReview() {
-  if (!reviewTarget.value || !reviewComment.value.trim()) return;
-  loading.value = true;
+function openReview(item: Submission) {
+  reviewTarget.value = item;
+  reviewDecision.value = item.status === "pending" ? "approved" : item.status;
+  reviewComment.value = item.status === "pending"
+    ? defaultReviewComment("approved")
+    : item.adminComment || defaultReviewComment(reviewDecision.value);
+  reviewError.value = "";
+}
+
+function openReviewFromLog() {
+  const submission = selectedLogSubmission.value;
+  if (!submission) return;
+  selectedLog.value = null;
+  openReview(submission);
+}
+
+function openApprovedSubmissionEditor(item: Submission) {
+  if (item.status !== "approved") return;
+  editingApprovedSubmission.value = clone(item);
+  approvedPayloadText.value = JSON.stringify(item.payload || {}, null, 2);
+  approvedEditError.value = "";
+}
+
+async function saveApprovedSubmission() {
+  const draft = editingApprovedSubmission.value;
+  if (!draft) return;
+  if (!draft.title.trim() || !draft.details.trim()) {
+    approvedEditError.value = "标题和正文不能为空。";
+    return;
+  }
+  let payload: Record<string, unknown>;
   try {
-    await api(`/api/admin/submissions/${reviewTarget.value.id}/review`, {
+    const parsed = JSON.parse(approvedPayloadText.value || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    approvedEditError.value = "表单信息必须是正确的 JSON 对象。";
+    return;
+  }
+
+  approvedEditSaving.value = true;
+  approvedEditError.value = "";
+  try {
+    const result = await api<{ submission: Submission }>(`/api/admin/submissions/${draft.id}/content`, {
       method: "PUT",
-      body: JSON.stringify({ status: reviewDecision.value, comment: reviewComment.value.trim() }),
+      body: JSON.stringify({
+        animalName: draft.animalName,
+        title: draft.title,
+        details: draft.details,
+        payload,
+        mediaUrl: draft.mediaUrl || "",
+        source: draft.source || "",
+        copyright: draft.copyright || "",
+      }),
     });
-    showToast("审核结果已保存，公开数据已同步");
+    const index = submissions.value.findIndex((item) => item.id === result.submission.id);
+    if (index >= 0) submissions.value[index] = result.submission;
+    reviewTarget.value = result.submission;
+    editingApprovedSubmission.value = null;
+    showToast("已通过内容已修改，并同步更新公开端数据");
+    await loadAll();
+  } catch (error) {
+    approvedEditError.value = error instanceof Error ? error.message : "修改失败，请稍后重试";
+  } finally {
+    approvedEditSaving.value = false;
+  }
+}
+
+function selectReviewDecision(decision: Exclude<SubmissionStatus, "pending">) {
+  const previousDefault = defaultReviewComment(reviewDecision.value);
+  reviewDecision.value = decision;
+  if (!reviewComment.value.trim() || reviewComment.value === previousDefault) {
+    reviewComment.value = defaultReviewComment(decision);
+  }
+  reviewError.value = "";
+}
+
+async function submitReview() {
+  if (!reviewTarget.value) return;
+  const comment = reviewComment.value.trim();
+  if (!comment) {
+    reviewError.value = "请填写审核反馈，提交者将在“我的投稿”中看到这段内容。";
+    return;
+  }
+  reviewSubmitting.value = true;
+  reviewError.value = "";
+  try {
+    const result = await api<{ submission: Submission }>(`/api/admin/submissions/${reviewTarget.value.id}/review`, {
+      method: "PUT",
+      body: JSON.stringify({ status: reviewDecision.value, comment }),
+    });
+    const index = submissions.value.findIndex((item) => item.id === result.submission.id);
+    if (index >= 0) submissions.value[index] = result.submission;
+    showToast(reviewDecision.value === "approved" ? "审核通过，内容已同步公开" : "审核结果和反馈已保存");
     reviewTarget.value = null;
     await loadAll();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "审核失败";
+    reviewError.value = error instanceof Error ? error.message : "审核失败，请稍后重试";
   } finally {
-    loading.value = false;
+    reviewSubmitting.value = false;
   }
 }
 
@@ -417,7 +682,23 @@ onMounted(async () => {
         <div class="filter-bar"><label><span>内容类型</span><select v-model="typeFilter"><option value="all">全部类型</option><option v-for="(label, id) in typeLabels" :key="id" :value="id">{{ label }}</option></select></label><label><span>提交状态</span><select v-model="statusFilter"><option value="all">全部状态</option><option value="pending">待审核</option><option value="need_supplement">需补充</option><option value="approved">已通过</option><option value="rejected">已退回</option></select></label><label class="search-control"><span>动物或提交者</span><div><AdminIcon name="search" :size="16" /><input v-model="search" placeholder="搜索动物、标题或提交者" /></div></label><button class="query-button">查询</button></div>
         <div class="table-panel">
           <table><thead><tr><th>类型</th><th>动物 / 内容</th><th>提交者</th><th>提交时间</th><th>版权 / 来源</th><th>状态</th><th>操作</th></tr></thead><tbody>
-            <tr v-for="item in filteredSubmissions" :key="item.id"><td><span class="type-tag">{{ typeLabels[item.type] }}</span></td><td><strong>{{ item.title }}</strong><span>{{ item.animalName }}</span></td><td>{{ item.submitterName }}</td><td>{{ formatTime(item.submittedAt) }}</td><td><strong>{{ item.copyright || '待核对' }}</strong><span>{{ item.source || '未填写来源' }}</span></td><td><span class="status-tag" :class="item.status">{{ item.statusLabel }}</span></td><td><div class="row-actions"><button @click="openReview(item, 'approved')">通过</button><button @click="openReview(item, 'need_supplement')">要求补充</button><button class="danger-link" @click="openReview(item, 'rejected')">退回</button></div></td></tr>
+            <tr
+              v-for="item in filteredSubmissions"
+              :key="item.id"
+              class="review-row"
+              tabindex="0"
+              :aria-label="`查看并审核：${item.title}`"
+              @click="openReview(item)"
+              @keyup.enter="openReview(item)"
+            >
+              <td><span class="type-tag">{{ typeLabels[item.type] }}</span></td>
+              <td><strong>{{ item.title }}</strong><span>{{ item.animalName }}</span></td>
+              <td>{{ item.submitterName }}</td>
+              <td>{{ formatTime(item.submittedAt) }}</td>
+              <td><strong>{{ item.copyright || '待核对' }}</strong><span>{{ item.source || '未填写来源' }}</span></td>
+              <td><span class="status-tag" :class="item.status">{{ item.statusLabel }}</span></td>
+              <td><button class="review-open-button" @click.stop="openReview(item)">查看审核</button></td>
+            </tr>
             <tr v-if="!filteredSubmissions.length"><td colspan="7" class="empty-cell">当前筛选条件下没有投稿</td></tr>
           </tbody></table>
         </div>
@@ -449,11 +730,214 @@ onMounted(async () => {
       </template>
 
       <template v-else>
-        <div class="table-panel"><table><thead><tr><th>时间</th><th>操作员</th><th>操作内容</th><th>对象</th></tr></thead><tbody><tr v-for="item in logs" :key="item.id"><td>{{ formatTime(item.createdAt) }}</td><td>{{ item.operator }}</td><td>{{ item.action }}</td><td><code>{{ item.targetType }} / {{ item.targetId }}</code></td></tr><tr v-if="!logs.length"><td colspan="4" class="empty-cell">暂无审核日志</td></tr></tbody></table></div>
+        <div class="table-panel">
+          <table>
+            <thead><tr><th>时间</th><th>操作员</th><th>操作内容</th><th>对象</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr
+                v-for="item in logs"
+                :key="item.id"
+                class="log-row"
+                tabindex="0"
+                :aria-label="`查看日志详情：${item.action}`"
+                @click="selectedLog = item"
+                @keyup.enter="selectedLog = item"
+              >
+                <td>{{ formatTime(item.createdAt) }}</td>
+                <td>{{ item.operator }}</td>
+                <td><strong>{{ item.action }}</strong><span>{{ item.id }}</span></td>
+                <td><strong>{{ logTargetTypeLabels[item.targetType] || item.targetType }}</strong><code>{{ item.targetId }}</code></td>
+                <td><button class="log-open-button" @click.stop="selectedLog = item">查看详情</button></td>
+              </tr>
+              <tr v-if="!logs.length"><td colspan="5" class="empty-cell">暂无审核日志</td></tr>
+            </tbody>
+          </table>
+        </div>
       </template>
     </section>
 
-    <div v-if="reviewTarget" class="modal-backdrop" @click="reviewTarget = null"><section class="modal-card" @click.stop><header><div><h2>{{ reviewTarget.title }}</h2><p>{{ reviewTarget.submitterName }} · {{ formatTime(reviewTarget.submittedAt) }}</p></div><button aria-label="关闭" @click="reviewTarget = null"><AdminIcon name="close" :size="18" /></button></header><dl><div><dt>动物</dt><dd>{{ reviewTarget.animalName }}</dd></div><div><dt>版权/来源</dt><dd>{{ reviewTarget.copyright || '待核对' }} · {{ reviewTarget.source || '未填写' }}</dd></div></dl><div v-if="reviewTarget.mediaUrl" class="submission-preview"><img :src="resolveAdminMediaUrl(reviewTarget.mediaUrl)" alt="投稿图片" /><p>{{ reviewTarget.details }}</p></div><p v-else class="submission-copy">{{ reviewTarget.details }}</p><label><span>审核意见</span><textarea v-model="reviewComment" rows="4"></textarea></label><footer><button class="secondary-button" @click="reviewTarget = null">取消</button><button class="primary-button" @click="submitReview">确认{{ reviewDecision === 'approved' ? '通过并公开' : reviewDecision === 'need_supplement' ? '要求补充' : '退回' }}</button></footer></section></div>
+    <div v-if="reviewTarget" class="modal-backdrop" @click="reviewTarget = null">
+      <section class="modal-card review-modal" role="dialog" aria-modal="true" aria-labelledby="review-dialog-title" @click.stop>
+        <header>
+          <div>
+            <span class="review-modal__eyebrow">{{ typeLabels[reviewTarget.type] }} · {{ reviewTarget.statusLabel }}</span>
+            <h2 id="review-dialog-title">{{ reviewTarget.title }}</h2>
+            <p>投稿编号：{{ reviewTarget.id }}</p>
+          </div>
+          <button aria-label="关闭审核详情" @click="reviewTarget = null"><AdminIcon name="close" :size="18" /></button>
+        </header>
+
+        <div class="review-meta-grid">
+          <div><span>提交者</span><strong>{{ reviewTarget.submitterName }}</strong><small>{{ reviewTarget.userId }}</small></div>
+          <div><span>提交时间</span><strong>{{ formatTime(reviewTarget.submittedAt) }}</strong></div>
+          <div><span>关联动物</span><strong>{{ reviewTarget.animalName || '待确认动物' }}</strong><small>{{ reviewTarget.animalId || '未绑定档案' }}</small></div>
+          <div><span>当前状态</span><strong>{{ reviewTarget.statusLabel }}</strong><small v-if="reviewTarget.reviewedAt">{{ reviewTarget.reviewerName || '审核员' }} · {{ formatTime(reviewTarget.reviewedAt) }}</small></div>
+        </div>
+
+        <section class="review-content-section">
+          <h3>提交内容</h3>
+          <p class="submission-copy">{{ reviewTarget.details }}</p>
+        </section>
+
+        <section v-if="reviewTarget.mediaUrl" class="review-content-section">
+          <h3>提交图片</h3>
+          <a class="review-image-link" :href="resolveAdminMediaUrl(reviewTarget.mediaUrl)" target="_blank" rel="noreferrer">
+            <img :src="resolveAdminMediaUrl(reviewTarget.mediaUrl)" alt="投稿图片，点击查看原图" />
+            <span>点击图片在浏览器查看原图</span>
+          </a>
+        </section>
+
+        <section class="review-content-section review-source-grid">
+          <div><h3>版权与授权</h3><p>{{ reviewTarget.copyright || '提交者未填写，需人工核对' }}</p></div>
+          <div><h3>资料来源</h3><p>{{ reviewTarget.source || '提交者未填写来源' }}</p></div>
+        </section>
+
+        <section v-if="reviewPayloadEntries.length" class="review-content-section">
+          <h3>表单详细信息</h3>
+          <div class="review-payload-grid">
+            <div v-for="entry in reviewPayloadEntries" :key="entry.key">
+              <span>{{ entry.label }}</span>
+              <pre>{{ entry.value }}</pre>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="reviewTarget.status !== 'pending' && reviewTarget.adminComment" class="review-history">
+          <h3>上次审核反馈</h3>
+          <p>{{ reviewTarget.adminComment }}</p>
+        </section>
+
+        <section class="review-decision-section">
+          <h3>选择审核结果</h3>
+          <div class="review-decision-options" role="radiogroup" aria-label="审核结果">
+            <button
+              v-for="option in reviewDecisionOptions"
+              :key="option.value"
+              type="button"
+              class="review-decision-card"
+              :class="[option.value, { active: reviewDecision === option.value }]"
+              :aria-pressed="reviewDecision === option.value"
+              @click="selectReviewDecision(option.value)"
+            >
+              <strong>{{ option.label }}</strong>
+              <span>{{ option.description }}</span>
+            </button>
+          </div>
+        </section>
+
+        <label class="review-feedback-field">
+          <span>反馈给提交者 <em>*</em></span>
+          <textarea v-model="reviewComment" rows="5" maxlength="1000" placeholder="请说明核验结果、公开范围，或需要补充/退回的具体原因"></textarea>
+          <small>这段反馈会保存到 MySQL，并在用户端“我的投稿”中展示。</small>
+        </label>
+        <div v-if="reviewError" class="review-error">{{ reviewError }}</div>
+
+        <footer>
+          <button
+            v-if="reviewTarget.status === 'approved' && currentUser.role === 'admin'"
+            class="secondary-button"
+            @click="openApprovedSubmissionEditor(reviewTarget)"
+          >编辑已通过内容</button>
+          <button class="secondary-button" :disabled="reviewSubmitting" @click="reviewTarget = null">取消</button>
+          <button class="primary-button" :class="`decision-${reviewDecision}`" :disabled="reviewSubmitting" @click="submitReview">
+            {{ reviewSubmitting ? '正在提交…' : reviewDecision === 'approved' ? '确认通过并公开' : reviewDecision === 'need_supplement' ? '提交补充要求' : '确认退回内容' }}
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div v-if="selectedLog" class="modal-backdrop" @click="selectedLog = null">
+      <section class="modal-card review-modal" role="dialog" aria-modal="true" aria-labelledby="log-dialog-title" @click.stop>
+        <header>
+          <div>
+            <span class="review-modal__eyebrow">{{ logTargetTypeLabels[selectedLog.targetType] || selectedLog.targetType }}</span>
+            <h2 id="log-dialog-title">{{ selectedLog.action }}</h2>
+            <p>日志编号：{{ selectedLog.id }}</p>
+          </div>
+          <button aria-label="关闭日志详情" @click="selectedLog = null"><AdminIcon name="close" :size="18" /></button>
+        </header>
+
+        <div class="review-meta-grid log-meta-grid">
+          <div><span>操作时间</span><strong>{{ formatTime(selectedLog.createdAt) }}</strong></div>
+          <div><span>操作员</span><strong>{{ selectedLog.operator }}</strong></div>
+          <div><span>对象类型</span><strong>{{ logTargetTypeLabels[selectedLog.targetType] || selectedLog.targetType }}</strong></div>
+          <div><span>对象 ID</span><strong>{{ selectedLog.targetId }}</strong></div>
+        </div>
+
+        <template v-if="selectedLogDetail">
+          <section class="review-content-section">
+            <h3>对象具体内容</h3>
+            <strong class="log-detail-title">{{ selectedLogDetail.title }}</strong>
+            <p v-if="selectedLogDetail.description" class="submission-copy">{{ selectedLogDetail.description }}</p>
+          </section>
+
+          <section v-if="selectedLogDetail.imageUrl" class="review-content-section">
+            <h3>关联图片</h3>
+            <a class="review-image-link" :href="resolveAdminMediaUrl(selectedLogDetail.imageUrl)" target="_blank" rel="noreferrer">
+              <img :src="resolveAdminMediaUrl(selectedLogDetail.imageUrl)" alt="日志对象图片，点击查看原图" />
+              <span>点击图片在浏览器查看原图</span>
+            </a>
+          </section>
+
+          <section class="review-content-section">
+            <h3>详细字段</h3>
+            <div class="review-payload-grid">
+              <div v-for="field in selectedLogDetail.fields" :key="field.label">
+                <span>{{ field.label }}</span>
+                <pre>{{ field.value }}</pre>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="selectedLogDetail.payloadEntries?.length" class="review-content-section">
+            <h3>原始表单信息</h3>
+            <div class="review-payload-grid">
+              <div v-for="entry in selectedLogDetail.payloadEntries" :key="entry.key">
+                <span>{{ entry.label }}</span>
+                <pre>{{ entry.value }}</pre>
+              </div>
+            </div>
+          </section>
+        </template>
+        <section v-else class="review-content-section log-detail-empty">
+          <h3>对象具体内容</h3>
+          <p>该对象已经删除，或当前账号无权读取；审核日志仍保留对象 ID 和操作记录。</p>
+        </section>
+
+        <footer>
+          <button class="secondary-button" @click="selectedLog = null">关闭</button>
+          <button v-if="selectedLogSubmission" class="primary-button" @click="openReviewFromLog">打开投稿审核</button>
+        </footer>
+      </section>
+    </div>
+
+    <div v-if="editingApprovedSubmission" class="modal-backdrop modal-backdrop--top" @click="editingApprovedSubmission = null">
+      <section class="modal-card modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="approved-edit-title" @click.stop>
+        <header>
+          <div>
+            <h2 id="approved-edit-title">编辑已通过内容</h2>
+            <p>保存后会同时更新投稿记录和已发布到用户端的内容，并写入审核日志。</p>
+          </div>
+          <button aria-label="关闭已通过内容编辑" @click="editingApprovedSubmission = null"><AdminIcon name="close" :size="18" /></button>
+        </header>
+        <div class="form-grid approved-content-form">
+          <label><span>标题</span><input v-model="editingApprovedSubmission.title" maxlength="255" /></label>
+          <label><span>关联动物显示名</span><input v-model="editingApprovedSubmission.animalName" /></label>
+          <label class="full"><span>内容正文</span><textarea v-model="editingApprovedSubmission.details" rows="6"></textarea></label>
+          <label><span>资料来源</span><input v-model="editingApprovedSubmission.source" /></label>
+          <label><span>版权与授权</span><input v-model="editingApprovedSubmission.copyright" /></label>
+          <label class="full"><span>图片 URL</span><input v-model="editingApprovedSubmission.mediaUrl" /></label>
+          <label class="full"><span>表单信息（JSON）</span><textarea v-model="approvedPayloadText" class="json-editor" rows="10" spellcheck="false"></textarea></label>
+        </div>
+        <div v-if="approvedEditError" class="review-error">{{ approvedEditError }}</div>
+        <footer>
+          <button class="secondary-button" :disabled="approvedEditSaving" @click="editingApprovedSubmission = null">取消</button>
+          <button class="primary-button" :disabled="approvedEditSaving" @click="saveApprovedSubmission">
+            {{ approvedEditSaving ? '正在同步…' : '保存并同步公开端' }}
+          </button>
+        </footer>
+      </section>
+    </div>
 
     <div v-if="editingAnimal" class="modal-backdrop" @click="editingAnimal = null">
       <section class="modal-card modal-card-wide" @click.stop>

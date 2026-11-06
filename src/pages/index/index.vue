@@ -83,7 +83,7 @@ const showWechatLoginSheet = ref(false);
 const wechatProfileNickname = ref("");
 const wechatProfileAvatarPath = ref("");
 const wechatProfileAvatarRemote = ref("");
-const enterHomeAfterWechatLogin = ref(false);
+let afterLoginAction: (() => void) | undefined;
 const wechatProfileSaving = ref(false);
 const showMemoryUploader = ref(false);
 const showSubmissionDetail = ref(false);
@@ -423,16 +423,15 @@ async function loadPrivateData() {
   }
 }
 
-function ensureLoggedIn(): boolean {
+function ensureLoggedIn(afterLogin?: () => void): boolean {
   if (currentUser.value.role !== "guest") return true;
-  openWechatProfileSheet(false);
+  openWechatProfileSheet();
+  afterLoginAction = afterLogin;
   return false;
 }
 
 function skipOnboarding() {
-  const isGuest = currentUser.value.role === "guest";
-  goMain("home", isGuest);
-  if (isGuest) openWechatProfileSheet(false);
+  goMain("home");
 }
 
 function nextOnboardingStep() {
@@ -473,7 +472,7 @@ onMounted(async () => {
   if (currentUser.value.role !== "guest") showWechatLoginSheet.value = false;
   await Promise.all([loadPublicData(), loadPrivateData()]);
   if (sharedAnimalId.value && animals.value.some((animal) => animal.id === sharedAnimalId.value)) {
-    openAnimal(sharedAnimalId.value, "story", true);
+    openAnimal(sharedAnimalId.value, "story");
   }
 });
 
@@ -492,15 +491,13 @@ async function resetScroll() {
   pageScrollTop.value = 0;
 }
 
-function goMain(tab: MainTab, allowGuest = false) {
-  if (!allowGuest && !ensureLoggedIn()) return;
+function goMain(tab: MainTab) {
   viewType.value = "main";
   mainTab.value = tab;
   resetScroll();
 }
 
-function openAnimal(id: string, tab: DetailTab = "story", allowGuest = false) {
-  if (!allowGuest && !ensureLoggedIn()) return;
+function openAnimal(id: string, tab: DetailTab = "story") {
   if (!animals.value.some((animal) => animal.id === id)) {
     triggerToast("该动物档案不存在或尚未公开");
     return;
@@ -512,27 +509,32 @@ function openAnimal(id: string, tab: DetailTab = "story", allowGuest = false) {
 }
 
 function openView(type: ViewType) {
-  if (!ensureLoggedIn()) return;
+  // 公开内容可直接浏览；投稿编辑和个人数据入口才需要账号。
+  const requiresLogin = [
+    "recommend_animal", "form_observation", "form_memory", "form_correction",
+    "form_task", "form_task_contribution", "ai_helper", "my_submissions", "my_favorites",
+  ].includes(type);
+  if (requiresLogin && !ensureLoggedIn(() => openView(type))) return;
   viewType.value = type;
   resetScroll();
 }
 
 function openCorrection(animalId = animals.value[0]?.id || "", returnToDetail = false) {
-  if (!ensureLoggedIn()) return;
+  if (!ensureLoggedIn(() => openCorrection(animalId, returnToDetail))) return;
   if (animalId) correctionForm.animalId = animalId;
   correctionReturnsToDetail.value = returnToDetail;
   openView("form_correction");
 }
 
 function startRecommend() {
-  if (!ensureLoggedIn()) return;
+  if (!ensureLoggedIn(startRecommend)) return;
   recommendStep.value = 1;
   recommendSubmitted.value = false;
   openView("recommend_animal");
 }
 
 function startTask() {
-  if (!ensureLoggedIn()) return;
+  if (!ensureLoggedIn(startTask)) return;
   Object.assign(taskForm, {
     animalId: "",
     title: "",
@@ -544,7 +546,7 @@ function startTask() {
 }
 
 function openTaskContribution(task: TaskChallenge) {
-  if (!ensureLoggedIn()) return;
+  if (!ensureLoggedIn(() => openTaskContribution(task))) return;
   selectedTask.value = task;
   Object.assign(taskContributionForm, {
     details: "",
@@ -590,7 +592,7 @@ function nextRecommendStep() {
 }
 
 function startObservation(animalId = animals.value[0]?.id || "") {
-  if (!ensureLoggedIn()) return;
+  if (!ensureLoggedIn(() => startObservation(animalId))) return;
   if (!animalId) {
     triggerToast("当前没有可选择的动物档案");
     return;
@@ -916,14 +918,20 @@ async function toggleFavorite(animalId: string) {
   }
 }
 
-function openWechatProfileSheet(enterHomeAfterLogin = false) {
-  enterHomeAfterWechatLogin.value = enterHomeAfterLogin;
+function openWechatProfileSheet() {
+  afterLoginAction = undefined;
   if (currentUser.value.role !== "guest") {
     wechatProfileNickname.value = currentUser.value.nickname === "微信用户" ? "" : currentUser.value.nickname;
     wechatProfileAvatarRemote.value = currentUser.value.avatarUrl;
     wechatProfileAvatarPath.value = "";
   }
   showWechatLoginSheet.value = true;
+}
+
+function closeWechatProfileSheet() {
+  if (wechatAuthLoading.value) return;
+  showWechatLoginSheet.value = false;
+  afterLoginAction = undefined;
 }
 
 function handleWechatAvatarChosen(event: any) {
@@ -992,8 +1000,10 @@ async function completeWechatLogin() {
     showWechatLoginSheet.value = false;
     wechatProfileAvatarPath.value = "";
     wechatProfileAvatarRemote.value = user.avatarUrl;
-    if (enterHomeAfterWechatLogin.value) goMain("home");
-    enterHomeAfterWechatLogin.value = false;
+    const continueAction = afterLoginAction;
+    afterLoginAction = undefined;
+    // 登录后恢复刚才的编辑入口，实际提交仍需用户确认。
+    continueAction?.();
     triggerToast(wasGuest ? `微信登录成功，欢迎 ${user.nickname}` : "微信头像和昵称已同步到后端");
   } catch (error) {
     triggerToast(error instanceof Error ? error.message : "微信登录或资料同步失败");
@@ -1007,12 +1017,13 @@ function handleLogout() {
   favoriteAnimals.value = [];
   submissions.value = [];
   showWechatLoginSheet.value = false;
+  afterLoginAction = undefined;
   triggerToast("已退出登录，请重新使用微信登录");
 }
 
 function shareCurrentAnimal(animalId: string) {
   const animal = animals.value.find((item) => item.id === animalId);
-  if (!animal || !ensureLoggedIn()) return;
+  if (!animal) return;
   selectedAnimalId.value = animalId;
 
   // #ifdef H5
@@ -1220,7 +1231,6 @@ async function submitTaskContribution() {
 }
 
 function backFromNested() {
-  if (!ensureLoggedIn()) return;
   if (viewType.value === "animal_detail") {
     goMain(mainTab.value === "archives" ? "archives" : "home");
     return;
@@ -1239,23 +1249,20 @@ function backFromNested() {
 }
 
 function protectedNotify(message: string) {
-  if (!ensureLoggedIn()) return;
   triggerToast(message);
 }
 
 function openArchiveSearch() {
-  if (!ensureLoggedIn()) return;
   triggerToast("已为您切换至档案列表，可在此搜索所有记录");
   goMain("archives");
 }
 
 function openSettings() {
-  if (!ensureLoggedIn()) return;
   showSettings.value = true;
 }
 
 function openMemoryUploader() {
-  if (!ensureLoggedIn()) return;
+  if (!ensureLoggedIn(openMemoryUploader)) return;
   showMemoryUploader.value = true;
 }
 
@@ -1361,7 +1368,7 @@ const observationBehaviors = [
             </view>
             <text class="onboarding-heading">02. 记录</text>
             <text class="onboarding-copy onboarding-copy--wide">
-              随手拍下的日常照片、一次投喂的记录、或是它睡觉的位置，汇聚在一起，就是最珍贵的野生历史。
+              随手拍下的日常照片、一次进食的记录、或是它睡觉的位置，汇聚在一起，就是最珍贵的野生历史。
             </text>
             <view v-if="featuredAnimal" class="observation-preview">
               <view class="observation-preview__image">
@@ -1385,10 +1392,10 @@ const observationBehaviors = [
               一个人记住，是回忆；很多人记住，就是充满温度的城市动物共同记忆。
             </text>
             <view class="onboarding-actions">
-              <button class="button button--wechat" :loading="wechatAuthLoading" @click="openWechatProfileSheet(true)">
-                <text class="wechat-mark">微</text>
-                微信登录
+              <button class="button button--green" @click="skipOnboarding">
+                开始浏览
               </button>
+              <text class="onboarding-copy">浏览无需登录，发表或修改信息时再登录。</text>
             </view>
           </view>
           </swiper-item>
@@ -1639,7 +1646,7 @@ const observationBehaviors = [
             :wechat-loading="wechatLoginLoading"
             :profile-stats="profileStats"
             :task-count="collaborationTasks.length"
-            @wechat-login="openWechatProfileSheet(false)"
+            @wechat-login="openWechatProfileSheet()"
             @logout="handleLogout"
             @submissions="openView('my_submissions')"
             @favorites="openView('my_favorites')"
@@ -1671,6 +1678,7 @@ const observationBehaviors = [
             @add-comment="addMemorialComment"
             @flower-comment="toggleCommentFlower"
             @like-observation="toggleObservationLike"
+            @login-required="ensureLoggedIn()"
           />
 
           <view v-else-if="viewType === 'recommend_animal'" class="page page--form">
@@ -2223,15 +2231,15 @@ const observationBehaviors = [
         </button>
       </view>
 
-      <view v-if="showWechatLoginSheet" class="modal-backdrop login-sheet-backdrop" @click="showWechatLoginSheet = false">
+      <view v-if="showWechatLoginSheet" class="modal-backdrop login-sheet-backdrop" @click="closeWechatProfileSheet">
         <view class="modal-card login-sheet" @click.stop>
           <view class="login-sheet__handle" />
           <view class="login-sheet__header">
             <view>
               <text>{{ currentUser.role === 'guest' ? '微信登录并注册' : '同步微信资料' }}</text>
-              <text>头像保存到后端 uploads，昵称同步写入 MySQL 用户资料</text>
+              <text>{{ currentUser.role === 'guest' ? '浏览无需登录，登录后即可发表或修改信息。' : '修改头像与昵称，保存后同步到账号。' }}</text>
             </view>
-            <button aria-label="关闭登录弹框" @click="showWechatLoginSheet = false">×</button>
+            <button aria-label="关闭登录弹框" @click="closeWechatProfileSheet">×</button>
           </view>
 
           <view class="wechat-profile-editor">

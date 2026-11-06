@@ -20,6 +20,7 @@
     "start": "node dist/server.cjs",
     "typecheck": "vue-tsc --noEmit",
     "test:api": "tsx scripts/api-smoke.ts",
+    "test:approved-edit": "tsx scripts/approved-content-edit-smoke.ts",
     "test:logs": "tsx scripts/logging-smoke.ts",
     "lint": "npm run typecheck",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""

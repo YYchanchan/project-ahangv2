@@ -21,6 +21,7 @@ export interface AnimalTimelineEvent {
 
 export interface ObservationRecord {
   id: string;
+  sourceSubmissionId?: string;
   username: string;
   avatar: string;
   date: string;

@@ -1,6 +1,6 @@
 import { computed, ref } from "vue";
 import type { User } from "../types";
-import { getApi, postApi, putApi } from "../services/api";
+import { ApiError, getApi, postApi, putApi } from "../services/api";
 
 export interface WechatProfileInput {
   nickname?: string;
@@ -20,6 +20,8 @@ interface CurrentUserResponse {
 
 const USER_STORAGE_KEY = "ahang_current_user";
 const TOKEN_STORAGE_KEY = "ahang_session_token";
+const SESSION_EXPIRES_AT_STORAGE_KEY = "ahang_session_expires_at";
+const DEFAULT_SESSION_SECONDS = 7 * 24 * 60 * 60;
 
 const guestUser: User = {
   id: "guest",
@@ -33,8 +35,9 @@ const guestUser: User = {
 function loadStoredUser(): User {
   try {
     const token = uni.getStorageSync(TOKEN_STORAGE_KEY);
+    const expiresAt = Number(uni.getStorageSync(SESSION_EXPIRES_AT_STORAGE_KEY) || 0);
     const stored = uni.getStorageSync(USER_STORAGE_KEY);
-    if (token && stored && typeof stored === "object" && stored.id) {
+    if (token && (!expiresAt || expiresAt > Date.now()) && stored && typeof stored === "object" && stored.id) {
       return stored as User;
     }
   } catch {
@@ -51,25 +54,48 @@ function persistUser(user: User) {
   uni.setStorageSync(USER_STORAGE_KEY, user);
 }
 
+function persistSession(token: string, user: User, expiresIn = DEFAULT_SESSION_SECONDS) {
+  uni.setStorageSync(TOKEN_STORAGE_KEY, token);
+  uni.setStorageSync(
+    SESSION_EXPIRES_AT_STORAGE_KEY,
+    Date.now() + Math.max(1, Number(expiresIn) || DEFAULT_SESSION_SECONDS) * 1000,
+  );
+  persistUser(user);
+}
+
 async function initializeAuth(): Promise<User> {
   const token = uni.getStorageSync(TOKEN_STORAGE_KEY);
+  let expiresAt = Number(uni.getStorageSync(SESSION_EXPIRES_AT_STORAGE_KEY) || 0);
   if (!token) {
     persistUser(guestUser);
+    return guestUser;
+  }
+  // 旧版本登录记录没有客户端到期时间，从升级后的首次启动起保留一周。
+  if (!expiresAt) {
+    expiresAt = Date.now() + DEFAULT_SESSION_SECONDS * 1000;
+    uni.setStorageSync(SESSION_EXPIRES_AT_STORAGE_KEY, expiresAt);
+  }
+  if (expiresAt && expiresAt <= Date.now()) {
+    logout();
     return guestUser;
   }
   try {
     const response = await getApi<CurrentUserResponse>("/api/auth/me");
     persistUser(response.user);
     return response.user;
-  } catch {
-    uni.removeStorageSync(TOKEN_STORAGE_KEY);
-    persistUser(guestUser);
-    return guestUser;
+  } catch (error) {
+    // 临时断网或后端短暂不可用时保留缓存会话；只有服务端明确拒绝令牌才退出。
+    if (error instanceof ApiError && (error.statusCode === 401 || error.statusCode === 403)) {
+      logout();
+      return guestUser;
+    }
+    return currentUser.value.role === "guest" ? guestUser : currentUser.value;
   }
 }
 
 function logout() {
   uni.removeStorageSync(TOKEN_STORAGE_KEY);
+  uni.removeStorageSync(SESSION_EXPIRES_AT_STORAGE_KEY);
   persistUser(guestUser);
 }
 
@@ -119,8 +145,7 @@ async function loginWithWechat(profile: WechatProfileInput = {}): Promise<User> 
       avatarUrl: profile.avatarUrl,
     });
 
-    uni.setStorageSync(TOKEN_STORAGE_KEY, response.token);
-    persistUser(response.user);
+    persistSession(response.token, response.user, response.expiresIn);
     return response.user;
   } finally {
     wechatLoginLoading.value = false;

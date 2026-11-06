@@ -53,6 +53,16 @@ export interface ReviewInput {
   comment: string;
 }
 
+export interface SubmissionContentUpdate {
+  animalName: string;
+  title: string;
+  details: string;
+  payload: Record<string, unknown>;
+  mediaUrl?: string;
+  source?: string;
+  copyright?: string;
+}
+
 export interface AdminStats {
   pending: number;
   today: number;
@@ -155,6 +165,11 @@ export interface Store {
     id: string,
     reviewer: User,
     input: ReviewInput,
+  ): Promise<SubmissionRecord | null>;
+  updateApprovedSubmission(
+    id: string,
+    input: SubmissionContentUpdate,
+    operator: User,
   ): Promise<SubmissionRecord | null>;
   getAdminStats(): Promise<AdminStats>;
   listUsers(search?: string): Promise<User[]>;

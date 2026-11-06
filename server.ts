@@ -15,6 +15,7 @@ import { startLogMaintenance, writeLog } from "./server/logger";
 import { createStore, type Store } from "./server/store";
 import type {
   ReviewInput,
+  SubmissionContentUpdate,
   SubmissionStatus,
   SubmissionType,
   UserUpdateInput,
@@ -423,11 +424,38 @@ export function buildApp(store: Store) {
     if (!input.status || !["approved", "need_supplement", "rejected"].includes(input.status)) {
       return res.status(400).json({ error: "审核状态无效" });
     }
+    const comment = typeof input.comment === "string" ? input.comment.trim() : "";
+    if (!comment) return res.status(400).json({ error: "请填写审核反馈" });
+    if (Array.from(comment).length > 1000) return res.status(400).json({ error: "审核反馈不能超过 1000 个字符" });
     const submission = await store.reviewSubmission(req.params.id, req.currentUser!, {
       status: input.status,
-      comment: typeof input.comment === "string" ? input.comment.trim() : "",
+      comment,
     });
     if (!submission) return res.status(404).json({ error: "投稿不存在" });
+    res.json({ submission });
+  }));
+  app.put("/api/admin/submissions/:id/content", requireAuth(["admin"]), asyncRoute(async (req, res) => {
+    const raw = req.body as Partial<SubmissionContentUpdate>;
+    const title = typeof raw.title === "string" ? raw.title.trim() : "";
+    const details = typeof raw.details === "string" ? raw.details.trim() : "";
+    const animalName = typeof raw.animalName === "string" ? raw.animalName.trim() : "";
+    const payload = raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+      ? raw.payload
+      : null;
+    if (!title || !details || !payload) {
+      return res.status(400).json({ error: "标题、正文和表单信息不能为空" });
+    }
+    if (Array.from(title).length > 255) return res.status(400).json({ error: "标题不能超过 255 个字符" });
+    const submission = await store.updateApprovedSubmission(req.params.id, {
+      animalName,
+      title,
+      details,
+      payload,
+      mediaUrl: typeof raw.mediaUrl === "string" ? raw.mediaUrl.trim() : undefined,
+      source: typeof raw.source === "string" ? raw.source.trim() : undefined,
+      copyright: typeof raw.copyright === "string" ? raw.copyright.trim() : undefined,
+    }, req.currentUser!);
+    if (!submission) return res.status(404).json({ error: "投稿不存在或尚未审核通过" });
     res.json({ submission });
   }));
   app.get("/api/admin/animals", adminOnly, asyncRoute(async (req, res) => {

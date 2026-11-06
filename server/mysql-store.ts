@@ -23,6 +23,7 @@ import {
   type ReviewInput,
   type ReviewLog,
   type Store,
+  type SubmissionContentUpdate,
   type SubmissionRecord,
   type SubmissionStatus,
   type SubmissionType,
@@ -879,6 +880,67 @@ export class MysqlStore implements Store {
     }
   }
 
+  async updateApprovedSubmission(
+    id: string,
+    input: SubmissionContentUpdate,
+    operator: User,
+  ): Promise<SubmissionRecord | null> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.query<RowDataPacket[]>(
+        `SELECT s.*, u.nickname submitter_name
+         FROM submissions s JOIN users u ON u.id = s.user_id
+         WHERE s.id = ? FOR UPDATE`,
+        [id],
+      );
+      const previousRow = rows[0];
+      if (!previousRow || previousRow.status !== "approved") {
+        await connection.rollback();
+        return null;
+      }
+
+      const updatedRow = {
+        ...previousRow,
+        animal_name: input.animalName,
+        title: input.title,
+        details: input.details,
+        payload_json: JSON.stringify(input.payload),
+        media_url: input.mediaUrl || null,
+        source_text: input.source || null,
+        copyright_text: input.copyright || null,
+      } as RowDataPacket;
+      await connection.execute(
+        `UPDATE submissions
+         SET animal_name = ?, title = ?, details = ?, payload_json = ?, media_url = ?, source_text = ?, copyright_text = ?
+         WHERE id = ?`,
+        [
+          updatedRow.animal_name,
+          updatedRow.title,
+          updatedRow.details,
+          updatedRow.payload_json,
+          updatedRow.media_url,
+          updatedRow.source_text,
+          updatedRow.copyright_text,
+          id,
+        ],
+      );
+      await this.publishSubmission(connection, updatedRow, previousRow);
+      await connection.execute(
+        `INSERT INTO review_logs (id, operator_id, operator_name, action_text, target_type, target_id)
+         VALUES (?, ?, ?, ?, 'submission', ?)`,
+        [`log-${randomUUID()}`, operator.id, operator.nickname, `修改已通过投稿：${input.title}`, id],
+      );
+      await connection.commit();
+      return await this.getSubmission(id);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   async getAdminStats(): Promise<AdminStats> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT
@@ -1049,13 +1111,21 @@ export class MysqlStore implements Store {
     }
   }
 
-  private async publishSubmission(connection: PoolConnection, row: RowDataPacket): Promise<void> {
+  private async publishSubmission(
+    connection: PoolConnection,
+    row: RowDataPacket,
+    previousRow?: RowDataPacket,
+  ): Promise<void> {
     const payload = parseJson<Record<string, unknown>>(row.payload_json);
     if (row.type === "task") {
       await connection.execute(
-        `INSERT IGNORE INTO collaboration_tasks
+        `INSERT INTO collaboration_tasks
          (id, creator_id, creator_name, animal_id, animal_name, title, description, expected_info, reward_label, source_submission_id, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+         ON DUPLICATE KEY UPDATE
+           creator_name=VALUES(creator_name), animal_id=VALUES(animal_id), animal_name=VALUES(animal_name),
+           title=VALUES(title), description=VALUES(description), expected_info=VALUES(expected_info),
+           reward_label=VALUES(reward_label), status='active'`,
         [
           `task-${String(row.id).slice(4)}`,
           row.user_id,
@@ -1081,35 +1151,61 @@ export class MysqlStore implements Store {
       );
       if (!animalRows[0]) return;
       const animal = parseJson<Animal>(animalRows[0].data_json);
+      animal.observations ||= [];
+      const previousPayload = previousRow
+        ? parseJson<Record<string, unknown>>(previousRow.payload_json)
+        : {};
+      const observationId = `obs-${String(row.id).replace(/^sub-/, "")}`;
+      const existingIndex = animal.observations.findIndex((item) =>
+        item.sourceSubmissionId === row.id ||
+        item.id === observationId ||
+        Boolean(previousRow &&
+          item.text === previousRow.details &&
+          item.date === String(previousPayload.dateTime || iso(previousRow.submitted_at)) &&
+          item.location === String(previousPayload.location || "未填写地点")),
+      );
+      const previousObservation = existingIndex >= 0 ? animal.observations[existingIndex] : undefined;
       const observation: ObservationRecord = {
-        id: `obs-${randomUUID()}`,
+        id: previousObservation?.id || observationId,
+        sourceSubmissionId: row.id,
         username: row.submitter_name || "公众观察员",
-        avatar: "",
+        avatar: previousObservation?.avatar || "",
         date: String(payload.dateTime || iso(row.submitted_at)),
         location: String(payload.location || "未填写地点"),
         text: row.details,
         image: row.media_url || undefined,
-        likes: 0,
-        commentsCount: 0,
-        category: "all",
+        likes: previousObservation?.likes || 0,
+        commentsCount: previousObservation?.commentsCount || 0,
+        category: previousObservation?.category || "all",
       };
-      animal.observations.unshift(observation);
-      animal.recordCount = (animal.recordCount || 0) + 1;
+      if (existingIndex >= 0) animal.observations.splice(existingIndex, 1, observation);
+      else {
+        animal.observations.unshift(observation);
+        animal.recordCount = (animal.recordCount || 0) + 1;
+      }
       await connection.execute("UPDATE animals SET data_json = ? WHERE id = ?", [JSON.stringify(animal), row.animal_id]);
       return;
     }
     if (row.type === "memory" || row.type === "archive") {
       await connection.execute(
-        `INSERT IGNORE INTO memories
+        `INSERT INTO memories
          (id, user_id, animal_ids, title, author_name, memory_date, content, category, category_label, image_url, submission_id, published)
-         SELECT ?, user_id, ?, title, ?, ?, details, ?, ?, media_url, id, 1 FROM submissions WHERE id = ?`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE
+           animal_ids=VALUES(animal_ids), title=VALUES(title), author_name=VALUES(author_name),
+           memory_date=VALUES(memory_date), content=VALUES(content), category=VALUES(category),
+           category_label=VALUES(category_label), image_url=VALUES(image_url), published=1`,
         [
-          `memory-${randomUUID()}`,
+          `memory-${String(row.id).replace(/^sub-/, "")}`,
+          row.user_id,
           JSON.stringify(row.animal_id ? [row.animal_id] : []),
+          row.title,
           row.submitter_name || "公众贡献者",
           String(payload.date || iso(row.submitted_at).slice(0, 10)),
+          row.details,
           row.type === "archive" ? "archive" : "reminiscence",
           row.type === "archive" ? "📚 资料" : "🌿 回忆",
+          row.media_url || null,
           row.id,
         ],
       );
@@ -1121,7 +1217,11 @@ export class MysqlStore implements Store {
         `INSERT INTO animals
          (id, name, nickname, species_code, species_name, status, institution, city, image_url, summary, data_json, published)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-         ON DUPLICATE KEY UPDATE data_json=VALUES(data_json), published=1, updated_at=NOW()`,
+         ON DUPLICATE KEY UPDATE
+           name=VALUES(name), nickname=VALUES(nickname), species_code=VALUES(species_code),
+           species_name=VALUES(species_name), status=VALUES(status), institution=VALUES(institution),
+           city=VALUES(city), image_url=VALUES(image_url), summary=VALUES(summary),
+           data_json=VALUES(data_json), published=1, updated_at=NOW()`,
         [
           animal.id,
           animal.name,

@@ -8,6 +8,13 @@ export function getApiBaseUrl(): string {
   return configuredBaseUrl;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly statusCode?: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export function resolveMediaUrl(source?: string): string {
   const value = source?.trim() || "";
   if (!value) return "";
@@ -45,10 +52,10 @@ export function requestApi<T>(
         }
 
         const body = response.data as { error?: string };
-        reject(new Error(body?.error || `请求失败（${response.statusCode}）`));
+        reject(new ApiError(body?.error || `请求失败（${response.statusCode}）`, response.statusCode));
       },
       fail(error) {
-        reject(new Error(error.errMsg || "网络连接失败"));
+        reject(new ApiError(error.errMsg || "网络连接失败"));
       },
     });
   });
