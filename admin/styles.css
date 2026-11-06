@@ -35,7 +35,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .login-card h1 { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: 26px; text-align: center; }
 .login-card > p { margin: 8px 0 24px; color: #78716c; font-size: 13px; text-align: center; }
 .login-card label, .modal-card label { display: flex; flex-direction: column; gap: 7px; margin-top: 15px; color: #57534e; font-size: 12px; font-weight: 700; }
-.login-card input, .modal-card input, .modal-card textarea { width: 100%; padding: 11px 12px; border: 1px solid #dcd7d2; border-radius: 8px; outline: none; background: #fafaf9; font-size: 13px; font-weight: 400; }
+.login-card input, .modal-card input, .modal-card textarea, .modal-card select { width: 100%; padding: 11px 12px; border: 1px solid #dcd7d2; border-radius: 8px; outline: none; background: #fafaf9; font-size: 13px; font-weight: 400; }
 .login-card input:focus, .modal-card input:focus, .modal-card textarea:focus { border-color: #2f5233; box-shadow: 0 0 0 3px rgba(47,82,51,.08); }
 .primary-button, .secondary-button { border: 0; border-radius: 8px; font-size: 13px; font-weight: 700; }
 .primary-button { padding: 11px 18px; background: #2f5233; color: #fff; }

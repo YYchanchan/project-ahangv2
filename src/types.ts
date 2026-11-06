@@ -89,6 +89,7 @@ export interface WildVsZooItem {
 
 export interface Species {
   id: string; // e.g. "african-lion"
+  aliases?: string[];
   biologicalProfile: BiologicalProfile;
   basicInfo: BasicInfo;
   characteristics: SpeciesCharacteristic[];

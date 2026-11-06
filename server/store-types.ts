@@ -17,7 +17,8 @@ export type SubmissionType =
   | "memory"
   | "correction"
   | "archive"
-  | "task";
+  | "task"
+  | "supplement";
 
 export type CollaborationTask = TaskChallenge;
 

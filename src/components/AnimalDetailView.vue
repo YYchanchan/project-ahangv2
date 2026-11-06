@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import type { Animal, MemorialCommentRecord, PublicMemoryRecord, Species } from "../types";
 import AhangIcon from "./AhangIcon.vue";
 import AnimalImage from "./AnimalImage.vue";
+import SpeciesProfileView from "./SpeciesProfileView.vue";
 import StatusBadge from "./StatusBadge.vue";
 import UiImageIcon from "./UiImageIcon.vue";
 
@@ -10,6 +11,7 @@ const props = defineProps<{
   animal: Animal;
   animals: Animal[];
   species?: Species;
+  speciesPeers?: Animal[];
   memories: PublicMemoryRecord[];
   comments: MemorialCommentRecord[];
   favorited: boolean;
@@ -23,6 +25,7 @@ const emit = defineEmits<{
   share: [animalId: string];
   correction: [animalId: string];
   observe: [animalId: string];
+  supplement: [animalId: string];
   openAnimal: [animalId: string];
   notify: [message: string];
   likeMemory: [memoryId: string];
@@ -124,53 +127,6 @@ const observationFilters = [
   { id: "moving", label: "散步" },
 ] as const;
 
-const speciesBasicInfo = computed(() => {
-  if (!props.species) return [];
-  const info = props.species.basicInfo;
-  return [
-    { icon: "🏡", label: "平均寿命（动物园）", value: info.captiveLifespan },
-    { icon: "⚖️", label: "成年体重", value: info.weight },
-    { icon: "📏", label: "体型特征", value: info.sizeHeight },
-    { icon: "🥩", label: "食性", value: info.diet },
-    { icon: "👥", label: "社会结构", value: info.socialStructure },
-    { icon: "🌙", label: "活动时间", value: info.activityTime },
-    { icon: "🐾", label: "繁殖方式", value: info.reproduction },
-    { icon: "🗺️", label: "分布区域", value: info.distribution },
-    { icon: "🌿", label: "栖息环境", value: info.habitat },
-    { icon: "🛡️", label: "IUCN 保护等级", value: info.iucnStatus },
-    { icon: "📜", label: "CITES 等级", value: info.citesStatus },
-  ].filter((item) => item.value);
-});
-
-const taxonomyCards = computed(() => {
-  if (!props.species) return [];
-  const profile = props.species.biologicalProfile;
-  return [
-    { label: "界 Kingdom", value: profile.kingdom },
-    { label: "门 Phylum", value: profile.phylum },
-    { label: "纲 Class", value: profile.className },
-    { label: "目 Order", value: profile.order },
-    { label: "科 Family", value: profile.family },
-    { label: "属 Genus", value: profile.genus },
-    { label: "种 Species", value: profile.species, highlighted: true },
-  ];
-});
-
-const taxonomyTree = computed(() => {
-  if (!props.species) return [];
-  const profile = props.species.biologicalProfile;
-  return [
-    { symbol: "★", label: "个体", name: props.animal.name, description: `${props.animal.institution}记录档案`, primary: "red" },
-    { symbol: "v", label: "物种", name: profile.chineseName, description: profile.latinName, primary: "green" },
-    { symbol: "2", label: "属 Genus", name: profile.genus.split(" ")[0], description: "亲缘属级分类" },
-    { symbol: "3", label: "科 Family", name: profile.family.split(" ")[0], description: "特化科级门类" },
-    { symbol: "4", label: "目 Order", name: profile.order.split(" ")[0], description: "动物分类目级" },
-    { symbol: "5", label: "纲 Class", name: profile.className.split(" ")[0], description: "恒温胎生哺乳" },
-    { symbol: "6", label: "门 Phylum", name: profile.phylum.split(" ")[0], description: "背侧脊索大类" },
-    { symbol: "7", label: "界 Kingdom", name: profile.kingdom.split(" ")[0], description: "多细胞真核生物" },
-  ];
-});
-
 function toggleFollow() {
   emit("toggleFavorite", props.animal.id);
 }
@@ -241,6 +197,15 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
     <view class="summary-card">
       <text>一句话认识它</text>
       <text>“{{ animal.summary || animal.description }}”</text>
+    </view>
+
+    <view class="supplement-bar">
+      <view>
+        <text>补充这只个体的资料</text>
+        <text v-if="species">可以补充照片、机构、生日、家庭关系和时间线。野外与动物园对比属于物种页，不用在这里重写。</text>
+        <text v-else>还没有关联到物种库，所以暂时看不到生物身份证和野外 / 动物园对比。点“补充资料”即可选择物种，或标成待核实。</text>
+      </view>
+      <button @click="emit('supplement', animal.id)">补充资料</button>
     </view>
 
     <view class="tag-row">
@@ -379,68 +344,23 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
       </button>
     </view>
 
+    <view v-if="species" class="detail-section">
+      <view class="section-title"><text>🐾</text><text>同物种的其他个体</text></view>
+      <view v-if="speciesPeers?.length" class="peer-list">
+        <button v-for="peer in speciesPeers" :key="peer.id" @click="emit('openAnimal', peer.id)">
+          <AnimalImage :species="peer.species" :src="peer.image || peer.coverUrl" :alt="peer.name" />
+          <view><text>{{ peer.name }}</text><text>{{ peer.commonName || peer.species }} · {{ peer.institution }}</text></view>
+          <text>查看 ›</text>
+        </button>
+      </view>
+      <view v-else class="empty-copy">
+        <text>还没有其他已关联个体</text>
+        <text>之后选择同一物种建档的个体，会出现在这里。</text>
+      </view>
+    </view>
+
     <view v-if="species" class="detail-section species-section">
-      <view class="species-heading">
-        <text>🔬</text>
-        <view><text>认识它的物种</text><text>通过 {{ animal.name }}，认识 {{ species.biologicalProfile.chineseName }}。</text></view>
-      </view>
-
-      <view class="subsection-title"><text>📄 生物身份证 (Biological Profile)</text><text>SPECIES ID CARD</text></view>
-      <view class="species-id-card">
-        <view class="species-id-card__primary">
-          <view><text>中文名称</text><text>{{ species.biologicalProfile.chineseName }}</text></view>
-          <view><text>英文名称</text><text>{{ species.biologicalProfile.englishName }}</text></view>
-          <view><text>学名 (拉丁文)</text><text>{{ species.biologicalProfile.latinName }}</text></view>
-        </view>
-        <view class="taxonomy-grid">
-          <view v-for="tax in taxonomyCards" :key="tax.label" :class="{ highlighted: tax.highlighted }">
-            <text>{{ tax.label }}</text><text>{{ tax.value }}</text>
-          </view>
-        </view>
-      </view>
-
-      <view class="subsection-title"><text>📊 基本资料 (Species Specifications)</text></view>
-      <view class="species-info-grid">
-        <view v-for="info in speciesBasicInfo" :key="info.label">
-          <text>{{ info.icon }}</text>
-          <view><text>{{ info.label }}</text><text>{{ info.value }}</text></view>
-        </view>
-      </view>
-
-      <view v-if="species.characteristics.length" class="species-block">
-        <view class="subsection-title"><text>✨ 物种独特习性 (Evolutionary Trait)</text></view>
-        <view v-for="(trait, index) in species.characteristics" :key="trait.title" class="trait-card">
-          <view class="trait-card__title"><text>0{{ index + 1 }}</text><text>{{ trait.title }}</text></view>
-          <text>{{ trait.description }}</text>
-        </view>
-      </view>
-
-      <view class="species-block">
-        <view class="subsection-title"><text>🌱 分类关系 (Taxonomy)</text></view>
-        <view class="taxonomy-tree">
-          <text>从个体到自然分类界限。点击各节点可进行学术追溯。</text>
-          <button
-            v-for="node in taxonomyTree"
-            :key="node.label"
-            @click="emit('notify', `【${node.label}】${node.name} - 系统发育学知识树页面研发中`)"
-          >
-            <text :class="[`primary-${node.primary || 'plain'}`]">{{ node.symbol }}</text>
-            <view><view class="taxonomy-node__name"><text>{{ node.name }}</text><text>({{ node.label }})</text></view><text>{{ node.description }}</text></view>
-            <text>›</text>
-          </button>
-        </view>
-      </view>
-
-      <view v-if="species.wildVsZoo?.length" class="species-block wild-zoo">
-        <view class="subsection-title"><text>🦁 野外 vs 动物园 (Wild vs Zoo)</text></view>
-        <view v-for="item in species.wildVsZoo" :key="item.title" class="wild-zoo__card">
-          <text>{{ item.title }}</text>
-          <view>
-            <view><text>🌲 野外 (Wild)</text><text>{{ item.wild }}</text></view>
-            <view><text>🏡 动物园 (Zoo)</text><text>{{ item.zoo }}</text></view>
-          </view>
-        </view>
-      </view>
+      <SpeciesProfileView :species="species" :anchor-name="animal.name" @notify="emit('notify', $event)" />
     </view>
   </view>
 </template>
@@ -1490,5 +1410,92 @@ button::after {
   font-family: Georgia, "Songti SC", serif;
   font-size: 8px;
   line-height: 1.55;
+}
+
+.supplement-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #e7e5e4;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.supplement-bar > view {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.supplement-bar > view text:first-child {
+  color: #292524;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.supplement-bar > view text:last-child {
+  color: #78716c;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.supplement-bar > button {
+  flex: none;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #2f5233;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.peer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.peer-list button {
+  display: grid;
+  grid-template-columns: 54px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #e7e5e4;
+  border-radius: 12px;
+  background: #fff;
+  text-align: left;
+}
+
+.peer-list button :deep(.animal-image),
+.peer-list button image,
+.peer-list button .animal-placeholder {
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+}
+
+.peer-list button > view {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.peer-list button > view text:first-child {
+  color: #292524;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.peer-list button > view text:last-child,
+.peer-list button > text {
+  color: #78716c;
+  font-size: 10px;
 }
 </style>
