@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import type { Animal, PublicMemoryRecord, Species, TaskChallenge, User, UserRole, UserStatus } from "../src/types";
+import {
+  isUncertainSpeciesCode,
+  resolveSpecies,
+  speciesLinkFields,
+  uncertainSpeciesFields,
+  UNCERTAIN_SPECIES_CODE,
+} from "../src/data/speciesResolver";
 import AdminIcon from "./AdminIcon.vue";
 
 type TabId = "review" | "animals" | "species" | "memories" | "tasks" | "users" | "logs";
-type SubmissionType = "recommend" | "observation" | "memory" | "correction" | "archive" | "task";
+type SubmissionType = "recommend" | "observation" | "memory" | "correction" | "archive" | "task" | "supplement";
 type SubmissionStatus = "pending" | "approved" | "need_supplement" | "rejected";
 
 interface LoginResponse { token: string; user: User }
@@ -93,6 +100,7 @@ const typeLabels: Record<SubmissionType, string> = {
   correction: "纠错补充",
   archive: "历史资料",
   task: "协作任务",
+  supplement: "补充资料",
 };
 
 const reviewDecisionOptions: Array<{
@@ -119,6 +127,9 @@ const payloadLabels: Record<string, string> = {
   rewardLabel: "协作奖励说明",
   taskId: "协作任务 ID",
   taskTitle: "协作任务标题",
+  fields: "补充的个体字段",
+  relatedSubmissionId: "关联投稿",
+  missingAtSubmit: "提交时缺少的字段",
 };
 
 function toPayloadEntries(payload: Record<string, unknown> = {}) {
@@ -538,8 +549,50 @@ async function submitReview() {
   }
 }
 
+const animalSpeciesQuery = ref("");
+
+const animalSpeciesOptions = computed(() => {
+  const query = animalSpeciesQuery.value.trim().toLowerCase();
+  const selectedId = editingAnimal.value?.speciesCode;
+  return species.value.filter((item) => {
+    if (item.id === selectedId) return true;
+    if (!query) return true;
+    const profile = item.biologicalProfile;
+    return [profile.chineseName, profile.englishName, profile.latinName, ...(item.aliases || [])]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+});
+
+function applyAdminSpeciesLink() {
+  const animal = editingAnimal.value;
+  if (!animal) return;
+  if (isUncertainSpeciesCode(animal.speciesCode)) {
+    Object.assign(animal, uncertainSpeciesFields());
+    return;
+  }
+  const picked = species.value.find((item) => item.id === animal.speciesCode);
+  if (picked) Object.assign(animal, speciesLinkFields(picked));
+}
+
+function beginEditAnimal(item: Animal) {
+  const copy = clone(item);
+  if (!copy.speciesCode || isUncertainSpeciesCode(copy.speciesCode)) {
+    const matched = resolveSpecies(species.value, copy);
+    if (matched) Object.assign(copy, speciesLinkFields(matched));
+  }
+  animalSpeciesQuery.value = "";
+  editingAnimal.value = copy;
+}
+
 async function saveAnimal() {
+  applyAdminSpeciesLink();
   if (!editingAnimal.value?.id.trim() || !editingAnimal.value.name.trim()) return;
+  if (!editingAnimal.value.speciesCode) {
+    errorMessage.value = "请从物种库选择物种，或标记为不确定 / 待核实";
+    return;
+  }
   loading.value = true;
   try {
     await api(`/api/admin/animals/${encodeURIComponent(editingAnimal.value.id)}`, { method: "PUT", body: JSON.stringify({ animal: editingAnimal.value }) });
@@ -599,8 +652,9 @@ async function deleteContent(kind: "animals" | "species" | "memories" | "tasks",
 }
 
 function createAnimal() {
+  animalSpeciesQuery.value = "";
   editingAnimal.value = {
-    id: "", name: "", nickname: "", species: "", scientificName: "", speciesCode: "", image: "",
+    id: "", name: "", nickname: "", species: "待核实物种", scientificName: "", speciesCode: UNCERTAIN_SPECIES_CODE, commonName: "不确定/待核实", englishName: "", image: "",
     imageType: "placeholder", status: "need_info", institution: "", city: "", gender: "未知",
     lifeSpan: "待核实", statusLabel: "待补充", tags: [], description: "", timeline: [], observations: [],
     verified: false, verifiedCount: 0, summary: "", recordCount: 0,
@@ -706,7 +760,7 @@ onMounted(async () => {
 
       <template v-else-if="activeTab === 'animals'">
         <div class="section-toolbar"><div class="toolbar-search"><AdminIcon name="search" :size="17" /><input v-model="search" placeholder="搜索名字、物种、城市或机构" /></div><div class="toolbar-actions"><span>共 {{ filteredAnimals.length }} 份公开档案</span><button class="primary-button" @click="createAnimal">新增档案</button></div></div>
-        <div class="table-panel"><table><thead><tr><th>动物</th><th>物种</th><th>机构 / 城市</th><th>状态</th><th>记录数</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredAnimals" :key="item.id"><td><div class="animal-cell"><img :src="resolveAdminMediaUrl(item.image)" alt="" /><div><strong>{{ item.name }}</strong><span>{{ item.nickname }}</span></div></div></td><td>{{ item.species }}</td><td><strong>{{ item.institution }}</strong><span>{{ item.city }}</span></td><td><span class="status-tag approved">{{ item.statusLabel }}</span></td><td>{{ item.recordCount || item.observations.length }}</td><td><div class="row-actions"><button @click="editingAnimal = clone(item)">编辑</button><button class="danger-link" @click="deleteContent('animals', item.id, item.name)">删除</button></div></td></tr></tbody></table></div>
+        <div class="table-panel"><table><thead><tr><th>动物</th><th>物种</th><th>机构 / 城市</th><th>状态</th><th>记录数</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredAnimals" :key="item.id"><td><div class="animal-cell"><img :src="resolveAdminMediaUrl(item.image)" alt="" /><div><strong>{{ item.name }}</strong><span>{{ item.nickname }}</span></div></div></td><td>{{ item.species }}</td><td><strong>{{ item.institution }}</strong><span>{{ item.city }}</span></td><td><span class="status-tag approved">{{ item.statusLabel }}</span></td><td>{{ item.recordCount || item.observations.length }}</td><td><div class="row-actions"><button @click="beginEditAnimal(item)">编辑</button><button class="danger-link" @click="deleteContent('animals', item.id, item.name)">删除</button></div></td></tr></tbody></table></div>
       </template>
 
       <template v-else-if="activeTab === 'species'">
@@ -943,7 +997,8 @@ onMounted(async () => {
       <section class="modal-card modal-card-wide" @click.stop>
         <header><div><h2>动物档案</h2><p>新增或编辑后直接写入 MySQL</p></div><button aria-label="关闭" @click="editingAnimal = null"><AdminIcon name="close" :size="18" /></button></header>
         <div class="form-grid">
-          <label><span>唯一 ID</span><input v-model="editingAnimal.id" /></label><label><span>名字</span><input v-model="editingAnimal.name" /></label><label><span>昵称</span><input v-model="editingAnimal.nickname" /></label><label><span>物种</span><input v-model="editingAnimal.species" /></label><label><span>机构</span><input v-model="editingAnimal.institution" /></label><label><span>城市</span><input v-model="editingAnimal.city" /></label><label><span>状态说明</span><input v-model="editingAnimal.statusLabel" /></label><label><span>图片 URL</span><input v-model="editingAnimal.image" /></label>
+          <label><span>唯一 ID</span><input v-model="editingAnimal.id" /></label><label><span>名字</span><input v-model="editingAnimal.name" /></label><label><span>昵称</span><input v-model="editingAnimal.nickname" /></label><label><span>机构</span><input v-model="editingAnimal.institution" /></label><label><span>城市</span><input v-model="editingAnimal.city" /></label><label><span>状态说明</span><input v-model="editingAnimal.statusLabel" /></label><label><span>图片 URL</span><input v-model="editingAnimal.image" /></label>
+          <label class="full"><span>物种（从物种库选择）</span><input v-model="animalSpeciesQuery" placeholder="搜索中文名、英文名或拉丁名" /><select v-model="editingAnimal.speciesCode" @change="applyAdminSpeciesLink"><option :value="UNCERTAIN_SPECIES_CODE">不确定 / 待核实</option><option v-for="item in animalSpeciesOptions" :key="item.id" :value="item.id">{{ item.biologicalProfile.chineseName }} · {{ item.biologicalProfile.englishName }} · {{ item.biologicalProfile.latinName }}</option></select><small>当前：{{ editingAnimal.commonName || "未选择" }} / {{ editingAnimal.species || "—" }} / {{ editingAnimal.scientificName || "—" }}（编号 {{ editingAnimal.speciesCode || "空" }}）</small></label>
           <div class="image-editor full">
             <img v-if="editingAnimal.image" :src="resolveAdminMediaUrl(editingAnimal.image)" alt="动物图片预览" />
             <div><label class="file-button"><input type="file" accept="image/jpeg,image/png,image/webp" :disabled="imageUploading" @change="uploadAdminImage($event, 'animal')" /><span>{{ imageUploading ? '上传中…' : '上传或更换图片' }}</span></label><a v-if="editingAnimal.image" :href="resolveAdminMediaUrl(editingAnimal.image)" target="_blank" rel="noreferrer">在浏览器查看原图</a><small>图片文件保存到后端 uploads，保存档案后数据库会同步新地址。</small></div>

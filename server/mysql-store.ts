@@ -5,6 +5,14 @@ import mysql, {
   type ResultSetHeader,
   type RowDataPacket,
 } from "mysql2/promise";
+import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import { mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
+import {
+  isUncertainSpeciesCode,
+  resolveSpecies,
+  speciesLinkFields,
+  uncertainSpeciesFields,
+} from "../src/data/speciesResolver";
 import type {
   Animal,
   CandleStat,
@@ -81,7 +89,7 @@ export const MYSQL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS submissions (
     id VARCHAR(80) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,
-    type ENUM('recommend','observation','memory','correction','archive','task') NOT NULL,
+    type ENUM('recommend','observation','memory','correction','archive','task','supplement') NOT NULL,
     animal_id VARCHAR(80) NULL,
     animal_name VARCHAR(160) NOT NULL DEFAULT '',
     title VARCHAR(255) NOT NULL,
@@ -100,7 +108,7 @@ export const MYSQL_SCHEMA = [
     CONSTRAINT fk_submissions_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_submissions_reviewer FOREIGN KEY (reviewer_id) REFERENCES users(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-  `ALTER TABLE submissions MODIFY COLUMN type ENUM('recommend','observation','memory','correction','archive','task') NOT NULL`,
+  `ALTER TABLE submissions MODIFY COLUMN type ENUM('recommend','observation','memory','correction','archive','task','supplement') NOT NULL`,
   `CREATE TABLE IF NOT EXISTS collaboration_tasks (
     id VARCHAR(80) PRIMARY KEY,
     creator_id VARCHAR(64) NULL,
@@ -294,6 +302,7 @@ export class MysqlStore implements Store {
     for (const statement of MYSQL_SCHEMA) await this.pool.query(statement);
     await this.ensureMediaStorageColumns();
     await this.ensureAdmin();
+    await this.ensurePresetSpecies();
   }
 
   async close(): Promise<void> {
@@ -1035,6 +1044,108 @@ export class MysqlStore implements Store {
     }
   }
 
+  private async ensurePresetSpecies(): Promise<void> {
+    await this.upsertSpecies(CHINESE_PANGOLIN, true);
+  }
+
+  private async loadPublishedSpecies(connection: Pool | PoolConnection): Promise<Species[]> {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      "SELECT data_json FROM species WHERE published = 1",
+    );
+    return rows.map((row) => parseJson<Species>(row.data_json));
+  }
+
+  private async applyResolvedSpecies(animal: Animal, catalog: Species[]): Promise<void> {
+    if (isUncertainSpeciesCode(animal.speciesCode)) {
+      Object.assign(animal, uncertainSpeciesFields());
+      return;
+    }
+    const resolved = resolveSpecies(catalog, animal);
+    if (resolved) Object.assign(animal, speciesLinkFields(resolved));
+  }
+
+  private async syncRecommendAnimalPayload(
+    connection: PoolConnection,
+    animalId: string,
+    fields: ReturnType<typeof readSupplementInput>,
+    catalog: Species[],
+  ): Promise<void> {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      `SELECT id, animal_name, payload_json FROM submissions
+       WHERE type = 'recommend' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.animal.id')) = ?
+       FOR UPDATE`,
+      [animalId],
+    );
+    for (const related of rows) {
+      const relatedPayload = parseJson<Record<string, unknown>>(related.payload_json);
+      if (!relatedPayload.animal || typeof relatedPayload.animal !== "object" || Array.isArray(relatedPayload.animal)) continue;
+      const animal = mergeIndividualSupplement(relatedPayload.animal as Animal, fields);
+      await this.applyResolvedSpecies(animal, catalog);
+      relatedPayload.animal = animal;
+      await connection.execute(
+        "UPDATE submissions SET animal_name = ?, payload_json = ? WHERE id = ?",
+        [animal.name || related.animal_name, JSON.stringify(relatedPayload), related.id],
+      );
+    }
+  }
+
+  private async publishSupplement(
+    connection: PoolConnection,
+    row: RowDataPacket,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const fields = readSupplementInput(payload);
+    const catalog = await this.loadPublishedSpecies(connection);
+    const animalId = typeof row.animal_id === "string" ? row.animal_id : "";
+    if (animalId) {
+      const [animalRows] = await connection.query<RowDataPacket[]>(
+        "SELECT data_json FROM animals WHERE id = ? FOR UPDATE",
+        [animalId],
+      );
+      if (animalRows[0]) {
+        const animal = mergeIndividualSupplement(parseJson<Animal>(animalRows[0].data_json), fields);
+        await this.applyResolvedSpecies(animal, catalog);
+        await connection.execute(
+          `UPDATE animals
+           SET name = ?, nickname = ?, species_code = ?, species_name = ?, institution = ?, city = ?, image_url = ?, summary = ?, data_json = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [
+            animal.name,
+            animal.nickname || "",
+            animal.speciesCode || "",
+            animal.species || "",
+            animal.institution || "",
+            animal.city || "",
+            animal.image || "",
+            animal.summary || animal.description || "",
+            JSON.stringify(animal),
+            animalId,
+          ],
+        );
+        await this.syncRecommendAnimalPayload(connection, animalId, fields, catalog);
+        return;
+      }
+    }
+
+    const relatedId = typeof payload.relatedSubmissionId === "string" ? payload.relatedSubmissionId.trim() : "";
+    if (!relatedId) return;
+    const [relatedRows] = await connection.query<RowDataPacket[]>(
+      "SELECT id, animal_name, payload_json FROM submissions WHERE id = ? FOR UPDATE",
+      [relatedId],
+    );
+    const related = relatedRows[0];
+    if (!related) return;
+    const relatedPayload = parseJson<Record<string, unknown>>(related.payload_json);
+    if (!relatedPayload.animal || typeof relatedPayload.animal !== "object" || Array.isArray(relatedPayload.animal)) return;
+    const animal = mergeIndividualSupplement(relatedPayload.animal as Animal, fields);
+    await this.applyResolvedSpecies(animal, catalog);
+    relatedPayload.animal = animal;
+    await connection.execute(
+      "UPDATE submissions SET animal_name = ?, payload_json = ? WHERE id = ?",
+      [animal.name || related.animal_name, JSON.stringify(relatedPayload), relatedId],
+    );
+  }
+
   private async upsertAnimal(animal: Animal, published: boolean, ignoreExisting = false): Promise<void> {
     const verb = ignoreExisting ? "INSERT IGNORE" : "INSERT";
     const update = ignoreExisting
@@ -1211,8 +1322,14 @@ export class MysqlStore implements Store {
       );
       return;
     }
+    if (row.type === "supplement") {
+      await this.publishSupplement(connection, row, payload);
+      return;
+    }
     if (row.type === "recommend" && payload.animal && typeof payload.animal === "object") {
       const animal = payload.animal as Animal;
+      await this.applyResolvedSpecies(animal, await this.loadPublishedSpecies(connection));
+      payload.animal = animal;
       await connection.execute(
         `INSERT INTO animals
          (id, name, nickname, species_code, species_name, status, institution, city, image_url, summary, data_json, published)

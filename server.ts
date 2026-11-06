@@ -384,10 +384,16 @@ export function buildApp(store: Store) {
       source?: string;
       copyright?: string;
     };
-    const allowed: SubmissionType[] = ["recommend", "observation", "memory", "correction", "archive", "task"];
+    const allowed: SubmissionType[] = ["recommend", "observation", "memory", "correction", "archive", "task", "supplement"];
     if (!body.type || !allowed.includes(body.type)) return res.status(400).json({ error: "投稿类型无效" });
     if (!body.title?.trim() || !body.details?.trim()) {
       return res.status(400).json({ error: "投稿标题和内容不能为空" });
+    }
+    if (body.type === "supplement") {
+      const relatedId = typeof body.payload?.relatedSubmissionId === "string" ? body.payload.relatedSubmissionId.trim() : "";
+      if (!body.animalId?.trim() && !relatedId) {
+        return res.status(400).json({ error: "补充资料需要关联一只个体或一条待补充投稿" });
+      }
     }
     const submission = await store.createSubmission(req.currentUser!, {
       type: body.type,
