@@ -9,6 +9,7 @@ import {
   UNCERTAIN_SPECIES_CODE,
 } from "../src/data/speciesResolver";
 import AdminIcon from "./AdminIcon.vue";
+import SpeciesEditor from "./SpeciesEditor.vue";
 
 type TabId = "review" | "animals" | "species" | "memories" | "tasks" | "users" | "logs";
 type SubmissionType = "recommend" | "observation" | "memory" | "correction" | "archive" | "task" | "supplement";
@@ -77,6 +78,8 @@ const reviewError = ref("");
 const reviewSubmitting = ref(false);
 const editingAnimal = ref<Animal | null>(null);
 const editingSpecies = ref<Species | null>(null);
+const speciesEditorIsNew = ref(false);
+const speciesEditorRef = ref<{ commitLists: () => void } | null>(null);
 const editingMemory = ref<PublicMemoryRecord | null>(null);
 const editingTask = ref<TaskChallenge | null>(null);
 const imageUploading = ref(false);
@@ -603,13 +606,52 @@ async function saveAnimal() {
   finally { loading.value = false; }
 }
 
+function speciesSlug(species: Species): string {
+  const fromEnglish = species.biologicalProfile.englishName
+    .trim()
+    .toLowerCase()
+    .replace(/['’.]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return fromEnglish || `species-${Date.now()}`;
+}
+
+function emptySpecies(): Species {
+  return {
+    id: "",
+    aliases: [],
+    biologicalProfile: { chineseName: "", englishName: "", latinName: "", kingdom: "", phylum: "", className: "", order: "", family: "", genus: "", species: "" },
+    basicInfo: { wildLifespan: "", captiveLifespan: "", weight: "", sizeHeight: "", diet: "", socialStructure: "", activityTime: "", reproduction: "", distribution: "", habitat: "", iucnStatus: "", citesStatus: "" },
+    characteristics: [],
+    faqs: [],
+    extendedReading: { congeneric: [], confamilial: [], articles: [], courses: [], videos: [], creativeProducts: [] },
+    wildVsZoo: [],
+  };
+}
+
+function linkedAnimalCount(speciesId: string): number {
+  return animals.value.filter((animal) => animal.speciesCode === speciesId).length;
+}
+
 async function saveSpecies() {
-  if (!editingSpecies.value?.id.trim() || !editingSpecies.value.biologicalProfile.chineseName.trim()) return;
+  const species = editingSpecies.value;
+  if (!species) return;
+  speciesEditorRef.value?.commitLists();
+  if (!species.biologicalProfile.chineseName.trim()) {
+    errorMessage.value = "请填写物种中文名。物种可以先单独创建，不必等有个体。";
+    return;
+  }
+  if (!species.biologicalProfile.latinName.trim()) species.biologicalProfile.latinName = species.biologicalProfile.species.trim();
+  if (!species.id.trim()) species.id = speciesSlug(species);
+  species.characteristics = species.characteristics.filter((item) => item.title.trim() && item.description.trim());
+  species.faqs = species.faqs.filter((item) => item.q.trim() && item.a.trim());
+  species.wildVsZoo = (species.wildVsZoo || []).filter((item) => item.title.trim() && (item.wild.trim() || item.zoo.trim()));
   loading.value = true;
+  errorMessage.value = "";
   try {
-    await api(`/api/admin/species/${encodeURIComponent(editingSpecies.value.id)}`, { method: "PUT", body: JSON.stringify({ species: editingSpecies.value }) });
+    await api(`/api/admin/species/${encodeURIComponent(species.id)}`, { method: "PUT", body: JSON.stringify({ species }) });
     editingSpecies.value = null;
-    showToast("物种知识已保存并同步到用户端");
+    showToast("物种科普已保存。关联到该物种的每只个体都会显示这份内容");
     await loadAll();
   } catch (error) { errorMessage.value = error instanceof Error ? error.message : "保存失败"; }
   finally { loading.value = false; }
@@ -662,12 +704,16 @@ function createAnimal() {
 }
 
 function createSpecies() {
-  editingSpecies.value = {
-    id: "",
-    biologicalProfile: { chineseName: "", englishName: "", latinName: "", kingdom: "", phylum: "", className: "", order: "", family: "", genus: "", species: "" },
-    basicInfo: { captiveLifespan: "", weight: "", sizeHeight: "", diet: "", socialStructure: "", activityTime: "", reproduction: "", distribution: "", habitat: "", iucnStatus: "", citesStatus: "" },
-    characteristics: [], faqs: [], extendedReading: { congeneric: [], confamilial: [], articles: [], courses: [], videos: [], creativeProducts: [] },
-  };
+  speciesEditorIsNew.value = true;
+  editingSpecies.value = emptySpecies();
+}
+
+function beginEditSpecies(item: Species) {
+  speciesEditorIsNew.value = false;
+  editingSpecies.value = clone(item);
+  if (!editingSpecies.value.wildVsZoo) editingSpecies.value.wildVsZoo = [];
+  if (!editingSpecies.value.aliases) editingSpecies.value.aliases = [];
+  if (!editingSpecies.value.basicInfo.wildLifespan) editingSpecies.value.basicInfo.wildLifespan = "";
 }
 
 function createMemory() {
@@ -764,8 +810,8 @@ onMounted(async () => {
       </template>
 
       <template v-else-if="activeTab === 'species'">
-        <div class="section-toolbar"><div class="toolbar-search"><AdminIcon name="search" :size="17" /><input v-model="search" placeholder="搜索中文名、英文名或拉丁名" /></div><div class="toolbar-actions"><span>共 {{ filteredSpecies.length }} 条物种知识</span><button class="primary-button" @click="createSpecies">新增物种</button></div></div>
-        <div class="table-panel"><table><thead><tr><th>中文名</th><th>英文名</th><th>拉丁名</th><th>保护状态</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredSpecies" :key="item.id"><td><strong>{{ item.biologicalProfile.chineseName }}</strong></td><td>{{ item.biologicalProfile.englishName }}</td><td><i>{{ item.biologicalProfile.latinName }}</i></td><td>{{ item.basicInfo.iucnStatus }}</td><td><div class="row-actions"><button @click="editingSpecies = clone(item)">编辑</button><button class="danger-link" @click="deleteContent('species', item.id, item.biologicalProfile.chineseName)">删除</button></div></td></tr></tbody></table></div>
+        <div class="section-toolbar"><div class="toolbar-search"><AdminIcon name="search" :size="17" /><input v-model="search" placeholder="搜索中文名、英文名或拉丁名" /></div><div class="toolbar-actions"><span>共 {{ filteredSpecies.length }} 条物种。先建物种，再把个体关联过来。</span><button class="primary-button" @click="createSpecies">新增物种</button></div></div>
+        <div class="table-panel"><table><thead><tr><th>中文名</th><th>英文名</th><th>拉丁名</th><th>保护状态</th><th>已关联个体</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredSpecies" :key="item.id"><td><strong>{{ item.biologicalProfile.chineseName }}</strong></td><td>{{ item.biologicalProfile.englishName }}</td><td><i>{{ item.biologicalProfile.latinName }}</i></td><td>{{ item.basicInfo.iucnStatus }}</td><td>{{ linkedAnimalCount(item.id) }}</td><td><div class="row-actions"><button @click="beginEditSpecies(item)">编辑科普</button><button class="danger-link" @click="deleteContent('species', item.id, item.biologicalProfile.chineseName)">删除</button></div></td></tr></tbody></table></div>
       </template>
 
       <template v-else-if="activeTab === 'memories'">
@@ -998,7 +1044,7 @@ onMounted(async () => {
         <header><div><h2>动物档案</h2><p>新增或编辑后直接写入 MySQL</p></div><button aria-label="关闭" @click="editingAnimal = null"><AdminIcon name="close" :size="18" /></button></header>
         <div class="form-grid">
           <label><span>唯一 ID</span><input v-model="editingAnimal.id" /></label><label><span>名字</span><input v-model="editingAnimal.name" /></label><label><span>昵称</span><input v-model="editingAnimal.nickname" /></label><label><span>机构</span><input v-model="editingAnimal.institution" /></label><label><span>城市</span><input v-model="editingAnimal.city" /></label><label><span>状态说明</span><input v-model="editingAnimal.statusLabel" /></label><label><span>图片 URL</span><input v-model="editingAnimal.image" /></label>
-          <label class="full"><span>物种（从物种库选择）</span><input v-model="animalSpeciesQuery" placeholder="搜索中文名、英文名或拉丁名" /><select v-model="editingAnimal.speciesCode" @change="applyAdminSpeciesLink"><option :value="UNCERTAIN_SPECIES_CODE">不确定 / 待核实</option><option v-for="item in animalSpeciesOptions" :key="item.id" :value="item.id">{{ item.biologicalProfile.chineseName }} · {{ item.biologicalProfile.englishName }} · {{ item.biologicalProfile.latinName }}</option></select><small>当前：{{ editingAnimal.commonName || "未选择" }} / {{ editingAnimal.species || "—" }} / {{ editingAnimal.scientificName || "—" }}（编号 {{ editingAnimal.speciesCode || "空" }}）</small></label>
+          <label class="full"><span>物种（从已有物种库选择）</span><input v-model="animalSpeciesQuery" placeholder="搜索中文名、英文名或拉丁名" /><select v-model="editingAnimal.speciesCode" @change="applyAdminSpeciesLink"><option :value="UNCERTAIN_SPECIES_CODE">不确定 / 待核实</option><option v-for="item in animalSpeciesOptions" :key="item.id" :value="item.id">{{ item.biologicalProfile.chineseName }} · {{ item.biologicalProfile.englishName }} · {{ item.biologicalProfile.latinName }}</option></select><small>当前：{{ editingAnimal.commonName || "未选择" }} / {{ editingAnimal.species || "—" }} / {{ editingAnimal.scientificName || "—" }}（编号 {{ editingAnimal.speciesCode || "空" }}）。新物种请先在「物种知识」里创建，科普不会写进这只个体。</small></label>
           <div class="image-editor full">
             <img v-if="editingAnimal.image" :src="resolveAdminMediaUrl(editingAnimal.image)" alt="动物图片预览" />
             <div><label class="file-button"><input type="file" accept="image/jpeg,image/png,image/webp" :disabled="imageUploading" @change="uploadAdminImage($event, 'animal')" /><span>{{ imageUploading ? '上传中…' : '上传或更换图片' }}</span></label><a v-if="editingAnimal.image" :href="resolveAdminMediaUrl(editingAnimal.image)" target="_blank" rel="noreferrer">在浏览器查看原图</a><small>图片文件保存到后端 uploads，保存档案后数据库会同步新地址。</small></div>
@@ -1009,7 +1055,13 @@ onMounted(async () => {
       </section>
     </div>
 
-    <div v-if="editingSpecies" class="modal-backdrop" @click="editingSpecies = null"><section class="modal-card modal-card-wide" @click.stop><header><div><h2>物种知识</h2><p>新增或编辑后直接写入 MySQL</p></div><button aria-label="关闭" @click="editingSpecies = null"><AdminIcon name="close" :size="18" /></button></header><div class="form-grid"><label><span>唯一 ID</span><input v-model="editingSpecies.id" /></label><label><span>中文名</span><input v-model="editingSpecies.biologicalProfile.chineseName" /></label><label><span>英文名</span><input v-model="editingSpecies.biologicalProfile.englishName" /></label><label><span>拉丁名</span><input v-model="editingSpecies.biologicalProfile.latinName" /></label><label><span>保护状态</span><input v-model="editingSpecies.basicInfo.iucnStatus" /></label><label class="full"><span>分布</span><textarea v-model="editingSpecies.basicInfo.distribution" rows="3"></textarea></label><label class="full"><span>栖息地</span><textarea v-model="editingSpecies.basicInfo.habitat" rows="3"></textarea></label></div><footer><button class="secondary-button" @click="editingSpecies = null">取消</button><button class="primary-button" @click="saveSpecies">保存并同步</button></footer></section></div>
+    <div v-if="editingSpecies" class="modal-backdrop" @click="editingSpecies = null">
+      <section class="modal-card modal-card-wide" @click.stop>
+        <header><div><h2>{{ speciesEditorIsNew ? "新建物种" : "编辑物种科普" }}</h2><p>可以在还没有任何个体时建立。保存后立即出现在物种库和个体的物种选择里。</p></div><button aria-label="关闭" @click="editingSpecies = null"><AdminIcon name="close" :size="18" /></button></header>
+        <SpeciesEditor ref="speciesEditorRef" :species="editingSpecies" :is-new="speciesEditorIsNew" />
+        <footer><button class="secondary-button" @click="editingSpecies = null">取消</button><button class="primary-button" @click="saveSpecies">保存物种科普</button></footer>
+      </section>
+    </div>
 
     <div v-if="editingMemory" class="modal-backdrop" @click="editingMemory = null">
       <section class="modal-card modal-card-wide" @click.stop>

@@ -6,8 +6,9 @@ import mysql, {
   type RowDataPacket,
 } from "mysql2/promise";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
-import { mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
+import { applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
 import {
+  animalWithSharedSpeciesLink,
   isUncertainSpeciesCode,
   resolveSpecies,
   speciesLinkFields,
@@ -303,6 +304,7 @@ export class MysqlStore implements Store {
     await this.ensureMediaStorageColumns();
     await this.ensureAdmin();
     await this.ensurePresetSpecies();
+    await this.linkUnlinkedAnimals();
   }
 
   async close(): Promise<void> {
@@ -1048,6 +1050,25 @@ export class MysqlStore implements Store {
     await this.upsertSpecies(CHINESE_PANGOLIN, true);
   }
 
+  /**
+   * Additive link only. Fills a missing speciesCode when the animal's existing
+   * names match the species library. Does not rewrite stories, photos, observations,
+   * submissions, or contributor records.
+   */
+  private async linkUnlinkedAnimals(): Promise<void> {
+    const catalog = await this.loadPublishedSpecies(this.pool);
+    const [rows] = await this.pool.query<RowDataPacket[]>("SELECT id, data_json FROM animals");
+    for (const row of rows) {
+      const animal = parseJson<Animal>(row.data_json);
+      const linked = animalWithSharedSpeciesLink(animal, catalog);
+      if (!linked) continue;
+      await this.pool.execute(
+        "UPDATE animals SET species_code = ?, species_name = ?, data_json = ? WHERE id = ?",
+        [linked.speciesCode || "", linked.species || "", JSON.stringify(linked), animal.id],
+      );
+    }
+  }
+
   private async loadPublishedSpecies(connection: Pool | PoolConnection): Promise<Species[]> {
     const [rows] = await connection.query<RowDataPacket[]>(
       "SELECT data_json FROM species WHERE published = 1",
@@ -1320,6 +1341,21 @@ export class MysqlStore implements Store {
           row.id,
         ],
       );
+      return;
+    }
+    if (row.type === "correction" && row.animal_id) {
+      const [animalRows] = await connection.query<RowDataPacket[]>(
+        "SELECT data_json FROM animals WHERE id = ? FOR UPDATE",
+        [row.animal_id],
+      );
+      if (animalRows[0]) {
+        const field = typeof payload.field === "string" ? payload.field : undefined;
+        const animal = applyCorrectionToAnimal(parseJson<Animal>(animalRows[0].data_json), String(row.details || ""), field);
+        await connection.execute(
+          "UPDATE animals SET data_json = ?, updated_at = NOW() WHERE id = ?",
+          [JSON.stringify(animal), row.animal_id],
+        );
+      }
       return;
     }
     if (row.type === "supplement") {

@@ -224,7 +224,8 @@ const taskContributionForm = reactive({
   copyrightConfirmed: false,
 });
 
-const supplementReturnTo = ref<"detail" | "submissions">("detail");
+const supplementReturnTo = ref<"detail" | "submissions" | "record">("detail");
+const supplementError = ref("");
 const supplementHints = ref({ missing: [] as string[], adminComment: "" });
 const supplementForm = reactive({
   animalId: "",
@@ -905,9 +906,33 @@ function startSupplement(animalId: string) {
   }
   if (!ensureLoggedIn(() => startSupplement(animalId))) return;
   fillSupplementForm(animal);
+  supplementError.value = "";
   supplementHints.value = { missing: missingIndividualFields(animal), adminComment: "" };
   supplementReturnTo.value = "detail";
   openView("form_supplement");
+}
+
+function startSupplementFromHub() {
+  if (!ensureLoggedIn(startSupplementFromHub)) return;
+  fillSupplementForm(undefined, "");
+  supplementForm.animalId = "";
+  supplementForm.animalName = "";
+  supplementError.value = "";
+  supplementHints.value = { missing: [], adminComment: "" };
+  supplementReturnTo.value = "record";
+  openView("form_supplement");
+}
+
+function selectSupplementAnimal(animalId: string) {
+  const animal = animals.value.find((item) => item.id === animalId);
+  if (!animal) return;
+  const photos = [...supplementForm.photos];
+  const returnTo = supplementReturnTo.value;
+  fillSupplementForm(animal);
+  supplementForm.photos = photos;
+  supplementReturnTo.value = returnTo;
+  supplementError.value = "";
+  supplementHints.value = { missing: missingIndividualFields(animal), adminComment: supplementHints.value.adminComment };
 }
 
 function submissionMissingFields(item: SubmissionItem): string[] {
@@ -966,14 +991,28 @@ function removeSupplementPhoto(index: number) {
   supplementForm.photos.splice(index, 1);
 }
 
+function supplementFieldChanged(value: string, original?: string): boolean {
+  const next = value.trim();
+  if (!next) return false;
+  const previous = (original || "").trim();
+  if (!previous || previous === "未知机构") return true;
+  return next !== previous;
+}
+
+function onSupplementAnimalPick(event: { detail?: { value?: string | number } }) {
+  const animal = animals.value[Number(event.detail?.value)];
+  if (animal) selectSupplementAnimal(animal.id);
+}
+
 async function submitSupplement() {
+  supplementError.value = "";
   if (!ensureLoggedIn()) return;
   if (!supplementForm.animalId && !supplementForm.relatedSubmissionId) {
-    triggerToast("没有找到要补充的个体");
+    supplementError.value = "请先选择要补充的个体。";
     return;
   }
   if (!supplementForm.authorized) {
-    triggerToast("请先确认资料授权与真实性声明");
+    supplementError.value = "请勾选资料授权后，再点提交。";
     return;
   }
   const timeline = supplementForm.timeline
@@ -993,20 +1032,22 @@ async function submitSupplement() {
   const speciesChanged = Boolean(identity && identity.speciesCode !== (originalAnimal?.speciesCode || ""));
   const hasContent = Boolean(
     supplementForm.photos.length
-    || supplementForm.institution.trim()
-    || supplementForm.city.trim()
-    || supplementForm.birthDate.trim()
-    || supplementForm.birthPlace.trim()
-    || supplementForm.father.trim()
-    || supplementForm.mother.trim()
-    || supplementForm.sibling.trim()
+    || supplementFieldChanged(supplementForm.institution, originalAnimal?.institution)
+    || supplementFieldChanged(supplementForm.city, originalAnimal?.city)
+    || supplementForm.area.trim()
+    || supplementFieldChanged(supplementForm.birthDate, originalAnimal?.birthDate)
+    || supplementFieldChanged(supplementForm.birthPlace, originalAnimal?.birthPlace)
+    || supplementFieldChanged(supplementForm.father, originalAnimal?.father)
+    || supplementFieldChanged(supplementForm.mother, originalAnimal?.mother)
+    || supplementFieldChanged(supplementForm.sibling, originalAnimal?.sibling)
     || supplementForm.relationshipNote.trim()
     || supplementForm.summary.trim()
     || timeline.length
+    || supplementForm.gender !== (originalAnimal?.gender || "未知")
     || speciesChanged,
   );
   if (!hasContent) {
-    triggerToast("请至少补充一项个体资料");
+    supplementError.value = "请至少填写一项新的个体资料，例如照片、展区、生日、家庭或一段说明。物种科普不用在这里重写。";
     return;
   }
 
@@ -1042,7 +1083,7 @@ async function submitSupplement() {
       animalId: supplementForm.animalId || undefined,
       animalName: supplementForm.animalName || "待确认个体",
       title: `补充资料：${supplementForm.animalName || "个体档案"}`,
-      details: detailParts.join("；") || "补充个体资料",
+      details: detailParts.join("；") || "补充这只个体的资料",
       mediaUrl: photos[0],
       source: supplementForm.source.trim() || "投稿人补充",
       copyright: supplementForm.copyright === "self" ? "本人原创自拍" : supplementForm.copyright === "authorized" ? "已获作者授权" : "仅后台线索",
@@ -1060,7 +1101,8 @@ async function submitSupplement() {
       openView("my_submissions");
     }
   } catch (error) {
-    triggerToast(error instanceof Error ? error.message : "补充资料提交失败");
+    supplementError.value = error instanceof Error ? error.message : "补充资料提交失败";
+    triggerToast(supplementError.value);
   }
 }
 
@@ -1964,6 +2006,7 @@ const observationBehaviors = [
             @recommend="startRecommend"
             @observe="startObservation()"
             @memory="openView('form_memory')"
+            @supplement="startSupplementFromHub"
             @correction="openCorrection()"
             @ai="openView('ai_helper')"
           />
@@ -2200,7 +2243,14 @@ const observationBehaviors = [
             </view>
             <view class="form-section">
               <text class="form-title">只补充这只个体</text>
-              <text class="form-intro">照片、机构、生日、家庭关系和时间线写在这里。野外与动物园对比、生物分类等物种科学内容由物种库统一发布，不用为每只动物重写。</text>
+              <text class="form-intro">照片、机构、生日、家庭关系和时间线写在这里。野外与动物园对比、生物分类等科普由编辑维护在物种库里，同一物种的每只个体都会显示那一份，不用在这里重写。</text>
+              <label class="field">
+                <text>要补充哪只个体 *</text>
+                <picker :range="animals" range-key="name" @change="onSupplementAnimalPick">
+                  <view class="picker-field">{{ supplementForm.animalName || "请选择已有档案" }} ›</view>
+                </picker>
+              </label>
+              <text v-if="supplementError" class="form-error">{{ supplementError }}</text>
               <view v-if="supplementHints.adminComment" class="admin-comment">
                 <text>审核说明</text><text>{{ supplementHints.adminComment }}</text>
               </view>
@@ -4777,6 +4827,15 @@ const observationBehaviors = [
   color: #78716c;
   font-size: 10px;
   line-height: 1.65;
+}
+
+.form-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #b83b26;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .form-subtitle {

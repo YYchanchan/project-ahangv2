@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
-import { mergeIndividualSupplement, missingIndividualFields } from "../src/data/individualSupplement";
+import { applyCorrectionToAnimal, mergeIndividualSupplement, missingIndividualFields } from "../src/data/individualSupplement";
 import { resolveStandardSpeciesName } from "../src/data/speciesImageCatalog";
 import {
+  animalWithSharedSpeciesLink,
   resolveSpecies,
   sameSpeciesAnimals,
   speciesLinkFields,
@@ -170,5 +171,34 @@ assert.equal(resolveStandardSpeciesName("猕猴"), "Rhesus Macaque");
 assert.equal(resolveStandardSpeciesName("日本猕猴"), "Japanese Macaque");
 assert.notEqual(resolveStandardSpeciesName("河马"), "Red Panda");
 assert.equal(resolveStandardSpeciesName("Pallas's Cat"), "Pallas's Cat");
+
+const dundun = animal({
+  id: "dundun",
+  name: "墩墩",
+  species: "非洲狮",
+  speciesCode: "",
+  description: "园里的年轻雄狮，左耳有缺口。",
+  institution: "广州动物园",
+});
+const linkedDundun = animalWithSharedSpeciesLink(dundun, catalog);
+assert.equal(linkedDundun?.speciesCode, "african-lion");
+assert.equal(linkedDundun?.species, "非洲狮");
+assert.equal(linkedDundun?.description, dundun.description);
+assert.equal(linkedDundun?.scientificName, "Panthera leo");
+assert.equal(animalWithSharedSpeciesLink(ahang, catalog), null);
+assert.equal(animalWithSharedSpeciesLink(animal({
+  id: "cougar",
+  name: "小微",
+  species: "美洲狮",
+  speciesCode: "",
+}), catalog), null);
+const uncertain = animal({ id: "unknown", name: "待定", speciesCode: UNCERTAIN_SPECIES_CODE, species: "非洲狮" });
+assert.equal(animalWithSharedSpeciesLink(uncertain, catalog), null);
+
+const corrected = applyCorrectionToAnimal(dundun, "出生年份应为2016年", "age");
+assert.equal(corrected.timeline.length, 1);
+assert.equal(corrected.timeline[0].title, "生卒资料补充");
+assert.equal(corrected.description, dundun.description);
+assert.equal(applyCorrectionToAnimal(corrected, "出生年份应为2016年", "age").timeline.length, 1);
 
 console.log("species link checks passed");

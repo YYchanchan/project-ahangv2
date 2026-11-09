@@ -116,6 +116,43 @@ export function resolveSpecies(
   return undefined;
 }
 
+/**
+ * Link an existing individual to a shared species record without replacing
+ * names, stories, photos, or observations the record already has.
+ * Returns null when the animal is already linked, explicitly unverified, or unknown.
+ */
+export function animalWithSharedSpeciesLink(animal: Animal, catalog: Species[]): Animal | null {
+  const code = (animal.speciesCode || "").trim();
+  if (isUncertainSpeciesCode(code)) return null;
+  if (code && catalog.some((species) => species.id === code)) return null;
+
+  const resolved = resolveSpecies(catalog, {
+    species: animal.species,
+    scientificName: animal.scientificName,
+    commonName: animal.commonName,
+    englishName: animal.englishName,
+    speciesId: code ? undefined : animal.speciesId,
+  });
+  if (!resolved) return null;
+
+  const identity = speciesLinkFields(resolved);
+  const next: Animal = {
+    ...animal,
+    speciesCode: identity.speciesCode,
+    speciesId: identity.speciesId,
+  };
+  if (!meaningfulName(animal.species)) next.species = identity.species;
+  if (!meaningfulName(animal.scientificName)) next.scientificName = identity.scientificName;
+  if (!meaningfulName(animal.commonName)) next.commonName = identity.commonName;
+  if (!meaningfulName(animal.englishName)) next.englishName = identity.englishName;
+  return next;
+}
+
+function meaningfulName(value?: string | null): boolean {
+  const key = (value || "").trim().toLowerCase();
+  return Boolean(key) && key !== "unknown" && key !== "待核实物种" && key !== "不确定/待核实";
+}
+
 export function sameSpeciesAnimals(catalog: Species[], animals: Animal[], current: Animal): Animal[] {
   const resolved = resolveSpecies(catalog, current);
   const code = current.speciesCode?.trim();

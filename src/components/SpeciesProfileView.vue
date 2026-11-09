@@ -76,8 +76,8 @@ const readingGroups = computed(() => {
       <text>🔬</text>
       <view>
         <text>认识这个物种</text>
-        <text v-if="anchorName">通过 {{ anchorName }}，认识 {{ profile.chineseName }}。物种科学内容来自物种库，不随每只个体重复填写。</text>
-        <text v-else>{{ profile.englishName }} · {{ profile.latinName }}</text>
+        <text v-if="anchorName">通过 {{ anchorName }}，认识 {{ profile.chineseName }}。这份科普来自同一条物种记录，同一物种的每只个体都显示它；编辑一次，全部同步。</text>
+        <text v-else>{{ profile.englishName }} · {{ profile.latinName }}。同一物种的每只个体都显示这份科普。</text>
       </view>
     </view>
 

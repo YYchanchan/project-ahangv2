@@ -143,6 +143,26 @@ export function mergeIndividualSupplement(animal: Animal, fields: IndividualSupp
   return next;
 }
 
+export function applyCorrectionToAnimal(animal: Animal, details: string, field?: string): Animal {
+  const description = details.trim();
+  if (!description) return animal;
+  const title = field === "gender"
+    ? "性别资料补充"
+    : field === "age"
+      ? "生卒资料补充"
+      : field === "timeline"
+        ? "时间线补充"
+        : "资料补充";
+  const timeline = [...(animal.timeline || [])];
+  if (timeline.some((event) => event.title === title && event.description === description)) return animal;
+  timeline.push({
+    year: String(new Date().getFullYear()),
+    title,
+    description,
+  });
+  return { ...animal, timeline };
+}
+
 export function readSupplementInput(payload: Record<string, unknown> | undefined): IndividualSupplementInput {
   const raw = payload?.fields;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
