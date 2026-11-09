@@ -86,7 +86,17 @@ function requireLogin(): boolean {
   return false;
 }
 
-const basicArchive = computed(() => [
+const needsSupplement = computed(() => {
+  const label = `${props.animal.statusLabel || ""} ${props.animal.lifeSpan || ""} ${props.animal.infoStatus || ""}`;
+  return props.animal.status === "need_info" || label.includes("待补充");
+});
+
+function requestSupplement() {
+  emit("supplement", props.animal.id);
+}
+
+const basicArchive = computed(() => {
+  const cells: Array<{ label: string; value: string; source: string; supplement?: boolean }> = [
   { label: "名字", value: props.animal.name, source: "官方来源" },
   {
     label: "昵称",
@@ -113,9 +123,12 @@ const basicArchive = computed(() => [
   {
     label: "状态",
     value: `${props.animal.statusLabel} · ${props.animal.lifeSpan}`,
-    source: "官方来源",
+    source: needsSupplement.value ? "点击补充" : "官方来源",
+    supplement: needsSupplement.value,
   },
-]);
+  ];
+  return cells;
+});
 
 const storySections = computed(() => [{ title: "生命故事", text: props.animal.description }]);
 
@@ -177,15 +190,26 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
         <view>
           <button aria-label="收藏" :class="{ active: favorited }" @click="toggleFollow"><UiImageIcon name="favorite" :size="19" :tone="favorited ? 'active' : 'dark'" /></button>
           <button aria-label="分享当前档案" open-type="share" @click="shareAnimal"><UiImageIcon name="share" :size="18" tone="dark" /></button>
-          <button aria-label="纠错" @click="emit('correction', animal.id)"><AhangIcon name="edit" :size="18" /></button>
+          <button aria-label="编辑这只个体的资料" @click="requestSupplement"><AhangIcon name="edit" :size="18" /></button>
         </view>
       </view>
       <view class="hero__identity">
         <view class="hero__name-row">
           <text>{{ animal.name }}</text>
-          <StatusBadge :status="animal.status" :label="animal.statusLabel" />
+          <button
+            v-if="needsSupplement"
+            class="hero-status"
+            aria-label="资料待补充，去补充这只个体"
+            @click="requestSupplement"
+          >
+            <StatusBadge :status="animal.status" :label="animal.statusLabel" />
+          </button>
+          <StatusBadge v-else :status="animal.status" :label="animal.statusLabel" />
         </view>
-        <text>{{ animal.species }} · {{ animal.gender }} · {{ animal.lifeSpan }}</text>
+        <button v-if="needsSupplement" class="hero-meta" @click="requestSupplement">
+          {{ animal.commonName || animal.species }} · {{ animal.gender }} · {{ animal.lifeSpan }}
+        </button>
+        <text v-else>{{ animal.commonName || animal.species }} · {{ animal.gender }} · {{ animal.lifeSpan }}</text>
       </view>
     </view>
 
@@ -215,11 +239,18 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
     <view class="detail-section">
       <view class="section-title"><text>📁</text><text>基础档案</text><text>ID: #{{ animal.id }}</text></view>
       <view class="archive-grid">
-        <view v-for="item in basicArchive" :key="item.label" class="archive-item">
-          <text>{{ item.label }}</text>
-          <text>{{ item.value }}</text>
-          <text>{{ item.source }}</text>
-        </view>
+        <template v-for="item in basicArchive" :key="item.label">
+          <button v-if="item.supplement" class="archive-item archive-item--action" @click="requestSupplement">
+            <text>{{ item.label }}</text>
+            <text>{{ item.value }}</text>
+            <text>{{ item.source }}</text>
+          </button>
+          <view v-else class="archive-item">
+            <text>{{ item.label }}</text>
+            <text>{{ item.value }}</text>
+            <text>{{ item.source }}</text>
+          </view>
+        </template>
       </view>
     </view>
 
@@ -454,11 +485,28 @@ button::after {
   font-weight: 700;
 }
 
-.hero__identity > text {
+.hero__identity > text,
+.hero-meta {
   display: block;
   margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #d6d3d1;
   font-size: 12px;
+  text-align: left;
+}
+
+.hero-status {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.hero-meta {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .test-notice {
@@ -609,6 +657,18 @@ button::after {
   margin-top: auto;
   color: #2f5233;
   font-size: 8px;
+}
+
+.archive-item--action {
+  width: 100%;
+  border-color: #fecaca;
+  background: #fff7f7;
+  text-align: left;
+}
+
+.archive-item--action text:nth-child(2),
+.archive-item--action text:last-child {
+  color: #b83b26;
 }
 
 .timeline {

@@ -69,7 +69,19 @@ const redPanda: Species = {
   },
 };
 
-const catalog = [lion, bear, redPanda, CHINESE_PANGOLIN];
+const giantPanda: Species = {
+  ...lion,
+  id: "giant-panda",
+  biologicalProfile: {
+    ...lion.biologicalProfile,
+    chineseName: "大熊猫",
+    englishName: "Giant Panda",
+    latinName: "Ailuropoda melanoleuca",
+    species: "Ailuropoda melanoleuca",
+  },
+};
+
+const catalog = [lion, bear, redPanda, giantPanda, CHINESE_PANGOLIN];
 
 function animal(partial: Partial<Animal> & Pick<Animal, "id" | "name">): Animal {
   return {
@@ -194,6 +206,34 @@ assert.equal(animalWithSharedSpeciesLink(animal({
 }), catalog), null);
 const uncertain = animal({ id: "unknown", name: "待定", speciesCode: UNCERTAIN_SPECIES_CODE, species: "非洲狮" });
 assert.equal(animalWithSharedSpeciesLink(uncertain, catalog), null);
+
+function linkedCode(name: string, speciesName: string) {
+  return animalWithSharedSpeciesLink(animal({
+    id: name,
+    name,
+    species: speciesName,
+    speciesCode: "",
+    description: `${name}的个体故事`,
+  }), catalog);
+}
+
+const dundunLive = linkedCode("墩墩", "非洲狮");
+const xingyi = linkedCode("星一", "大熊猫");
+const meizhu = linkedCode("妹珠", "大熊猫");
+const dede = linkedCode("得得", "白狮");
+const xiaowei = linkedCode("小微", "美洲狮");
+assert.equal(dundunLive?.speciesCode, "african-lion");
+assert.equal(dundunLive?.species, "非洲狮");
+assert.equal(dundunLive?.description, "墩墩的个体故事");
+assert.equal(xingyi?.speciesCode, "giant-panda");
+assert.equal(xingyi?.species, "大熊猫");
+assert.equal(meizhu?.speciesCode, "giant-panda");
+assert.equal(meizhu?.species, "大熊猫");
+assert.equal(dede?.speciesCode, "african-lion");
+assert.equal(dede?.species, "白狮");
+assert.equal(dede?.commonName, "非洲狮");
+assert.equal(xiaowei, null);
+assert.equal(resolveSpecies(catalog, { species: "白狮" })?.id, "african-lion");
 
 const corrected = applyCorrectionToAnimal(dundun, "出生年份应为2016年", "age");
 assert.equal(corrected.timeline.length, 1);

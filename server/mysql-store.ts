@@ -304,6 +304,7 @@ export class MysqlStore implements Store {
     await this.ensureMediaStorageColumns();
     await this.ensureAdmin();
     await this.ensurePresetSpecies();
+    await this.ensureSpeciesAlias("african-lion", "白狮");
     await this.linkUnlinkedAnimals();
   }
 
@@ -1050,6 +1051,24 @@ export class MysqlStore implements Store {
     await this.upsertSpecies(CHINESE_PANGOLIN, true);
   }
 
+  /** Append one alias onto an existing species row. Other science fields stay as they are. */
+  private async ensureSpeciesAlias(speciesId: string, alias: string): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT data_json FROM species WHERE id = ? LIMIT 1",
+      [speciesId],
+    );
+    if (!rows[0]) return;
+    const species = parseJson<Species>(rows[0].data_json);
+    const aliases = new Set((species.aliases || []).map((item) => item.trim()).filter(Boolean));
+    if (aliases.has(alias) || species.biologicalProfile?.chineseName === alias) return;
+    aliases.add(alias);
+    species.aliases = [...aliases];
+    await this.pool.execute(
+      "UPDATE species SET data_json = ? WHERE id = ?",
+      [JSON.stringify(species), speciesId],
+    );
+  }
+
   /**
    * Additive link only. Fills a missing speciesCode when the animal's existing
    * names match the species library. Does not rewrite stories, photos, observations,
@@ -1081,8 +1100,13 @@ export class MysqlStore implements Store {
       Object.assign(animal, uncertainSpeciesFields());
       return;
     }
-    const resolved = resolveSpecies(catalog, animal);
-    if (resolved) Object.assign(animal, speciesLinkFields(resolved));
+    const code = (animal.speciesCode || "").trim();
+    if (code && catalog.some((species) => species.id === code)) return;
+    const linked = animalWithSharedSpeciesLink(
+      { ...animal, speciesCode: "" },
+      catalog,
+    );
+    if (linked) Object.assign(animal, linked);
   }
 
   private async syncRecommendAnimalPayload(

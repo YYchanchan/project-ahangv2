@@ -26,6 +26,7 @@ export interface SpeciesMatchInput {
  * Keys are library ids. A synonym is only used when that species is in the catalog.
  */
 const EXTRA_ALIASES: Record<string, string[]> = {
+  // 白狮 is a colour morph of the African lion, not a separate species.
   "african-lion": ["狮", "狮子", "白狮"],
   "red-panda": ["红熊猫"],
   "asiatic-black-bear": ["Asian Black Bear", "黑熊", "月熊"],
