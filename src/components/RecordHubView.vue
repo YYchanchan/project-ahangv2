@@ -5,6 +5,7 @@ const emit = defineEmits<{
   recommend: [];
   observe: [];
   memory: [];
+  supplement: [];
   correction: [];
   ai: [];
 }>();
@@ -13,14 +14,14 @@ const options = [
   { id: "recommend", title: "推荐一只动物", copy: "它还没有自己的档案", icon: "plus", tone: "champagne" },
   { id: "observe", title: "上传一次观察", copy: "记录你今天看到的行为", icon: "camera", tone: "green" },
   { id: "memory", title: "分享一段回忆", copy: "上传过去的照片或故事", icon: "heart", tone: "amber" },
-  { id: "correction", title: "补充或纠正资料", copy: "让已有档案更加准确", icon: "info", tone: "slate" },
+  { id: "supplement", title: "补充资料", copy: "补充这只个体的照片、生日或家庭", icon: "info", tone: "slate" },
 ] as const;
 
 function choose(id: (typeof options)[number]["id"]) {
   if (id === "recommend") emit("recommend");
   if (id === "observe") emit("observe");
   if (id === "memory") emit("memory");
-  if (id === "correction") emit("correction");
+  if (id === "supplement") emit("supplement");
 }
 </script>
 
@@ -43,6 +44,8 @@ function choose(id: (typeof options)[number]["id"]) {
         <AhangIcon name="next" :size="16" />
       </button>
     </view>
+
+    <button class="correction-link" @click="emit('correction')">这只个体的名字、性别或时间有误？提交一条纠错</button>
 
     <view class="ai-entry">
       <view>
@@ -155,6 +158,13 @@ button::after {
 .record-option--slate .record-option__icon {
   background: rgba(90, 107, 124, 0.09);
   color: #5a6b7c;
+}
+
+.correction-link {
+  margin-top: 14px;
+  color: #78716c;
+  font-size: 12px;
+  text-align: left;
 }
 
 .ai-entry {

@@ -9,6 +9,7 @@ import path from "node:path";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import { speciesScienceRejection } from "./src/data/speciesSubmissionGuard";
 import type { Animal, PublicMemoryRecord, Species, TaskChallenge, User, UserRole } from "./src/types";
 import { createSessionToken, verifySessionToken } from "./server/security";
 import { startLogMaintenance, writeLog } from "./server/logger";
@@ -384,10 +385,18 @@ export function buildApp(store: Store) {
       source?: string;
       copyright?: string;
     };
-    const allowed: SubmissionType[] = ["recommend", "observation", "memory", "correction", "archive", "task"];
+    const allowed: SubmissionType[] = ["recommend", "observation", "memory", "correction", "archive", "task", "supplement"];
     if (!body.type || !allowed.includes(body.type)) return res.status(400).json({ error: "投稿类型无效" });
     if (!body.title?.trim() || !body.details?.trim()) {
       return res.status(400).json({ error: "投稿标题和内容不能为空" });
+    }
+    const speciesRejection = speciesScienceRejection({ type: body.type, payload: body.payload });
+    if (speciesRejection) return res.status(400).json({ error: speciesRejection });
+    if (body.type === "supplement") {
+      const relatedId = typeof body.payload?.relatedSubmissionId === "string" ? body.payload.relatedSubmissionId.trim() : "";
+      if (!body.animalId?.trim() && !relatedId) {
+        return res.status(400).json({ error: "补充资料需要关联一只个体或一条待补充投稿" });
+      }
     }
     const submission = await store.createSubmission(req.currentUser!, {
       type: body.type,

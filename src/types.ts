@@ -87,8 +87,20 @@ export interface WildVsZooItem {
   zoo: string;
 }
 
+export interface SpeciesImageCredit {
+  author?: string;
+  license?: string;
+  sourceUrl?: string;
+}
+
 export interface Species {
   id: string; // e.g. "african-lion"
+  aliases?: string[];
+  /** Optional uploaded or external cover. Empty means the page may borrow an existing photo. */
+  coverImage?: string;
+  imageCredit?: SpeciesImageCredit;
+  /** Read-only display hint. Not stored. */
+  fallbackCover?: string;
   biologicalProfile: BiologicalProfile;
   basicInfo: BasicInfo;
   characteristics: SpeciesCharacteristic[];

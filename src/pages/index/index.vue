@@ -7,8 +7,22 @@ import AnimalImage from "../../components/AnimalImage.vue";
 import MemorialPlazaView from "../../components/MemorialPlazaView.vue";
 import ProfileView from "../../components/ProfileView.vue";
 import RecordHubView from "../../components/RecordHubView.vue";
+import SpeciesProfileView from "../../components/SpeciesProfileView.vue";
+import SpeciesSelect from "../../components/SpeciesSelect.vue";
 import StatusBadge from "../../components/StatusBadge.vue";
 import UiImageIcon from "../../components/UiImageIcon.vue";
+import { missingIndividualFields } from "../../data/individualSupplement";
+import { SPECIES_RECRUIT_SUBTITLE, SPECIES_RECRUIT_TITLE } from "../../data/speciesRecruitment";
+import { resolveSpeciesCover } from "../../data/speciesCover";
+import {
+  isUncertainSpeciesCode,
+  resolveSpecies,
+  sameSpeciesAnimals,
+  speciesLinkFields,
+  speciesOptionLabel,
+  uncertainSpeciesFields,
+  UNCERTAIN_SPECIES_CODE,
+} from "../../data/speciesResolver";
 import type {
   Animal,
   CandleStat,
@@ -37,20 +51,27 @@ type ViewType =
   | "form_observation"
   | "form_memory"
   | "form_correction"
+  | "form_supplement"
+  | "species_detail"
   | "ai_helper"
   | "my_favorites";
 
 type DetailTab = "story" | "observations" | "memories" | "species";
 type UiImageIconName = "home" | "archive" | "memorial" | "profile";
 
-type SubmissionItem = DetailedSubmissionRecord;
+type SubmissionItem = DetailedSubmissionRecord & {
+  animalId?: string;
+  payload?: Record<string, unknown>;
+};
 
 interface ApiSubmission {
   id: string;
-  type: "recommend" | "observation" | "memory" | "correction" | "archive" | "task";
+  type: "recommend" | "observation" | "memory" | "correction" | "archive" | "task" | "supplement";
+  animalId?: string;
   animalName: string;
   title: string;
   details: string;
+  payload?: Record<string, unknown>;
   mediaUrl?: string;
   source?: string;
   copyright?: string;
@@ -75,6 +96,9 @@ const selectedAnimalId = ref("");
 const detailTab = ref<DetailTab>("story");
 const archiveFilter = ref("all");
 const archiveSearch = ref("");
+const archiveMode = ref<"animals" | "species">("animals");
+const speciesSearch = ref("");
+const selectedSpeciesId = ref("");
 const memorialFilter = ref("all");
 const toastText = ref("");
 const toastVisible = ref(false);
@@ -124,6 +148,7 @@ const profileStats = ref<ProfileStats>({
   favoriteCount: 0,
 });
 
+const recommendLockedSpeciesId = ref("");
 const recommendForm = reactive({
   province: "广东省",
   zoo: "广州动物园",
@@ -134,7 +159,7 @@ const recommendForm = reactive({
   name: "",
   nickname: "",
   dontKnowName: false,
-  species: "",
+  speciesCode: "",
   gender: "未知",
   reasons: [] as string[],
   otherReason: "",
@@ -202,6 +227,32 @@ const taskContributionForm = reactive({
   copyrightConfirmed: false,
 });
 
+const supplementReturnTo = ref<"detail" | "submissions" | "record">("detail");
+const supplementError = ref("");
+const supplementHints = ref({ missing: [] as string[], adminComment: "" });
+const supplementForm = reactive({
+  animalId: "",
+  relatedSubmissionId: "",
+  animalName: "",
+  speciesCode: "",
+  institution: "",
+  city: "",
+  area: "",
+  gender: "未知" as Animal["gender"],
+  birthDate: "",
+  birthPlace: "",
+  father: "",
+  mother: "",
+  sibling: "",
+  relationshipNote: "",
+  summary: "",
+  source: "",
+  copyright: "self",
+  authorized: false,
+  photos: [] as string[],
+  timeline: [{ year: "", title: "", description: "" }],
+});
+
 const aiState = reactive({
   status: "idle" as "idle" | "scanning" | "done",
   image: "",
@@ -221,11 +272,48 @@ const featuredAnimal = computed(() => animals.value[0]);
 const selectedSpecies = computed(() => {
   const animal = selectedAnimal.value;
   if (!animal) return undefined;
-  return speciesItems.value.find(
-    (species) =>
-      species.id === animal.speciesCode ||
-      species.biologicalProfile.englishName === animal.species,
-  );
+  return resolveSpecies(speciesItems.value, animal);
+});
+
+const selectedSpeciesPeers = computed(() => {
+  const animal = selectedAnimal.value;
+  if (!animal) return [];
+  return sameSpeciesAnimals(speciesItems.value, animals.value, animal);
+});
+
+const filteredSpeciesLibrary = computed(() => {
+  const query = speciesSearch.value.trim().toLowerCase();
+  return speciesItems.value.filter((species) => {
+    const profile = species.biologicalProfile;
+    const haystack = [profile.chineseName, profile.englishName, profile.latinName, ...(species.aliases || [])]
+      .join(" ")
+      .toLowerCase();
+    return !query || haystack.includes(query);
+  });
+});
+
+const selectedSpeciesRecord = computed(() =>
+  speciesItems.value.find((species) => species.id === selectedSpeciesId.value),
+);
+
+const selectedSpeciesAnimals = computed(() =>
+  animals.value.filter((animal) => resolveSpecies(speciesItems.value, animal)?.id === selectedSpeciesId.value),
+);
+
+const recommendSpeciesLabel = computed(() => {
+  if (recommendForm.dontKnowName || isUncertainSpeciesCode(recommendForm.speciesCode)) return "不确定 / 待核实";
+  const picked = speciesItems.value.find((species) => species.id === recommendForm.speciesCode);
+  return picked ? speciesOptionLabel(picked) : "待选择";
+});
+
+const recommendDuplicates = computed(() => {
+  if (!recommendForm.speciesCode || isUncertainSpeciesCode(recommendForm.speciesCode)) return [];
+  const zoo = recommendForm.zoo.trim();
+  return animals.value.filter((animal) => {
+    if (resolveSpecies(speciesItems.value, animal)?.id !== recommendForm.speciesCode) return false;
+    if (!zoo || recommendForm.uncertainLocation) return true;
+    return animal.institution.includes(zoo) || zoo.includes(animal.institution);
+  });
 });
 
 const filteredAnimals = computed(() => {
@@ -366,6 +454,8 @@ function toSubmissionItem(item: ApiSubmission): SubmissionItem {
     details: item.details,
     adminComment: item.adminComment,
     animalName: item.animalName,
+    animalId: item.animalId,
+    payload: item.payload,
     photo: resolveMediaUrl(item.mediaUrl) || undefined,
     source: item.source,
     copyright: item.copyright,
@@ -511,7 +601,7 @@ function openAnimal(id: string, tab: DetailTab = "story") {
 function openView(type: ViewType) {
   // 公开内容可直接浏览；投稿编辑和个人数据入口才需要账号。
   const requiresLogin = [
-    "recommend_animal", "form_observation", "form_memory", "form_correction",
+    "recommend_animal", "form_observation", "form_memory", "form_correction", "form_supplement",
     "form_task", "form_task_contribution", "ai_helper", "my_submissions", "my_favorites",
   ].includes(type);
   if (requiresLogin && !ensureLoggedIn(() => openView(type))) return;
@@ -526,11 +616,26 @@ function openCorrection(animalId = animals.value[0]?.id || "", returnToDetail = 
   openView("form_correction");
 }
 
-function startRecommend() {
-  if (!ensureLoggedIn(startRecommend)) return;
+function startRecommend(speciesId = "") {
+  const lockedId = typeof speciesId === "string" ? speciesId : "";
+  if (!ensureLoggedIn(() => startRecommend(lockedId))) return;
+  recommendLockedSpeciesId.value = lockedId;
+  if (lockedId) {
+    recommendForm.speciesCode = lockedId;
+    recommendForm.dontKnowName = false;
+  }
   recommendStep.value = 1;
   recommendSubmitted.value = false;
   openView("recommend_animal");
+}
+
+function leaveRecommend() {
+  const speciesId = recommendLockedSpeciesId.value;
+  if (speciesId) {
+    openSpecies(speciesId);
+    return;
+  }
+  goMain("record");
 }
 
 function startTask() {
@@ -557,6 +662,31 @@ function openTaskContribution(task: TaskChallenge) {
   openView("form_task_contribution");
 }
 
+function toggleDontKnowSpecies() {
+  if (recommendLockedSpeciesId.value) return;
+  recommendForm.dontKnowName = !recommendForm.dontKnowName;
+  if (recommendForm.dontKnowName) recommendForm.speciesCode = UNCERTAIN_SPECIES_CODE;
+}
+
+function openSpecies(id: string) {
+  if (!speciesItems.value.some((species) => species.id === id)) {
+    triggerToast("该物种尚未发布");
+    return;
+  }
+  selectedSpeciesId.value = id;
+  viewType.value = "species_detail";
+  resetScroll();
+}
+
+function speciesAnimalCount(speciesId: string): number {
+  return animals.value.filter((animal) => resolveSpecies(speciesItems.value, animal)?.id === speciesId).length;
+}
+
+function speciesCardImage(species: Species): string {
+  const cover = resolveSpeciesCover(species, animals.value, speciesItems.value);
+  return cover.kind === "placeholder" ? "" : cover.src;
+}
+
 function toggleRecommendReason(reason: string) {
   const index = recommendForm.reasons.indexOf(reason);
   if (index >= 0) recommendForm.reasons.splice(index, 1);
@@ -573,9 +703,9 @@ function nextRecommendStep() {
   if (
     recommendStep.value === 2 &&
     !recommendForm.dontKnowName &&
-    !recommendForm.species.trim()
+    !recommendForm.speciesCode
   ) {
-    triggerToast("请填写物种名称，或勾选完全不知道");
+    triggerToast("请从物种库选择物种，或勾选不知道 / 待核实");
     return;
   }
   if (recommendStep.value === 3) {
@@ -635,7 +765,7 @@ function nextObservationStep() {
   observationStep.value += 1;
 }
 
-function chooseImage(target: "recommend" | "observation" | "memory" | "task_contribution") {
+function chooseImage(target: "recommend" | "observation" | "memory" | "task_contribution" | "supplement") {
   if (!ensureLoggedIn()) return;
   uni.chooseImage({
     count: 1,
@@ -647,6 +777,7 @@ function chooseImage(target: "recommend" | "observation" | "memory" | "task_cont
       if (target === "observation") observationForm.photo = path;
       if (target === "memory") memoryForm.photo = path;
       if (target === "task_contribution") taskContributionForm.photo = path;
+      if (target === "supplement" && supplementForm.photos.length < 3) supplementForm.photos.push(path);
       triggerToast("图片已载入，可继续填写");
     },
     fail(error) {
@@ -721,13 +852,15 @@ async function submitRecommendation() {
   try {
     const mediaUrl = await uploadMedia(recommendForm.photo);
     const id = `candidate-${Date.now()}`;
+    const pickedSpecies = speciesItems.value.find((species) => species.id === recommendForm.speciesCode);
+    const identity = recommendForm.dontKnowName || !pickedSpecies
+      ? uncertainSpeciesFields()
+      : speciesLinkFields(pickedSpecies);
     const candidate: Animal = {
       id,
       name: recommendForm.dontKnowName ? "待确认名字" : recommendForm.name || "未命名个体",
       nickname: recommendForm.dontKnowName ? "未命名" : recommendForm.nickname,
-      species: recommendForm.dontKnowName ? "待核实物种" : recommendForm.species || "Unknown",
-      scientificName: "",
-      speciesCode: "",
+      ...identity,
       image: mediaUrl,
       imageType: "real",
       status: "need_info",
@@ -761,6 +894,229 @@ async function submitRecommendation() {
     triggerToast("推荐已提交，审核通过后才会生成公开档案");
   } catch (error) {
     triggerToast(error instanceof Error ? error.message : "推荐提交失败");
+  }
+}
+
+function fillSupplementForm(animal: Partial<Animal> | undefined, fallbackName = "") {
+  Object.assign(supplementForm, {
+    animalId: animal?.id || "",
+    relatedSubmissionId: "",
+    animalName: animal?.name || fallbackName || "待确认个体",
+    speciesCode: animal?.speciesCode || "",
+    institution: !animal?.institution || animal.institution === "未知机构" ? "" : animal.institution,
+    city: animal?.city || "",
+    area: "",
+    gender: animal?.gender || "未知",
+    birthDate: animal?.birthDate || "",
+    birthPlace: animal?.birthPlace || "",
+    father: animal?.father || "",
+    mother: animal?.mother || "",
+    sibling: animal?.sibling || "",
+    relationshipNote: "",
+    summary: "",
+    source: "",
+    copyright: "self",
+    authorized: false,
+    photos: [],
+    timeline: [{ year: "", title: "", description: "" }],
+  });
+}
+
+function startSupplement(animalId: string) {
+  const animal = animals.value.find((item) => item.id === animalId);
+  if (!animal) {
+    triggerToast("这只个体还没有公开档案");
+    return;
+  }
+  if (!ensureLoggedIn(() => startSupplement(animalId))) return;
+  fillSupplementForm(animal);
+  supplementError.value = "";
+  supplementHints.value = { missing: missingIndividualFields(animal), adminComment: "" };
+  supplementReturnTo.value = "detail";
+  openView("form_supplement");
+}
+
+function startSupplementFromHub() {
+  if (!ensureLoggedIn(startSupplementFromHub)) return;
+  fillSupplementForm(undefined, "");
+  supplementForm.animalId = "";
+  supplementForm.animalName = "";
+  supplementError.value = "";
+  supplementHints.value = { missing: [], adminComment: "" };
+  supplementReturnTo.value = "record";
+  openView("form_supplement");
+}
+
+function selectSupplementAnimal(animalId: string) {
+  const animal = animals.value.find((item) => item.id === animalId);
+  if (!animal) return;
+  const photos = [...supplementForm.photos];
+  const returnTo = supplementReturnTo.value;
+  fillSupplementForm(animal);
+  supplementForm.photos = photos;
+  supplementReturnTo.value = returnTo;
+  supplementError.value = "";
+  supplementHints.value = { missing: missingIndividualFields(animal), adminComment: supplementHints.value.adminComment };
+}
+
+function submissionMissingFields(item: SubmissionItem): string[] {
+  const live = item.animalId ? animals.value.find((animal) => animal.id === item.animalId) : undefined;
+  const payloadAnimal = item.payload && typeof item.payload.animal === "object" && item.payload.animal && !Array.isArray(item.payload.animal)
+    ? item.payload.animal as Animal
+    : undefined;
+  return missingIndividualFields(live || payloadAnimal);
+}
+
+function openSupplementFromSubmission(item: SubmissionItem) {
+  if (!ensureLoggedIn(() => openSupplementFromSubmission(item))) return;
+  showSubmissionDetail.value = false;
+  const payloadAnimal = item.payload && typeof item.payload.animal === "object" && item.payload.animal && !Array.isArray(item.payload.animal)
+    ? item.payload.animal as Animal
+    : undefined;
+  const live = item.animalId ? animals.value.find((animal) => animal.id === item.animalId) : undefined;
+  const base = live || payloadAnimal;
+  fillSupplementForm(base, item.animalName);
+  if (live) {
+    supplementForm.animalId = live.id;
+    supplementForm.relatedSubmissionId = "";
+  } else {
+    supplementForm.animalId = base?.id || item.animalId || "";
+    supplementForm.relatedSubmissionId = item.id;
+  }
+  supplementHints.value = {
+    missing: missingIndividualFields(base),
+    adminComment: item.adminComment || "",
+  };
+  supplementReturnTo.value = "submissions";
+  openView("form_supplement");
+}
+
+function leaveSupplement() {
+  if (supplementReturnTo.value === "detail" && animals.value.some((animal) => animal.id === supplementForm.animalId)) {
+    openAnimal(supplementForm.animalId);
+    return;
+  }
+  if (supplementReturnTo.value === "submissions") {
+    openView("my_submissions");
+    return;
+  }
+  goMain("record");
+}
+
+function setSupplementGender(gender: string) {
+  if (gender === "雄性" || gender === "雌性" || gender === "未知") supplementForm.gender = gender;
+}
+
+function addSupplementTimeline() {
+  supplementForm.timeline.push({ year: "", title: "", description: "" });
+}
+
+function removeSupplementPhoto(index: number) {
+  supplementForm.photos.splice(index, 1);
+}
+
+function supplementFieldChanged(value: string, original?: string): boolean {
+  const next = value.trim();
+  if (!next) return false;
+  const previous = (original || "").trim();
+  if (!previous || previous === "未知机构") return true;
+  return next !== previous;
+}
+
+function onSupplementAnimalPick(event: { detail?: { value?: string | number } }) {
+  const animal = animals.value[Number(event.detail?.value)];
+  if (animal) selectSupplementAnimal(animal.id);
+}
+
+async function submitSupplement() {
+  supplementError.value = "";
+  if (!ensureLoggedIn()) return;
+  if (!supplementForm.animalId && !supplementForm.relatedSubmissionId) {
+    supplementError.value = "请先选择要补充的个体。";
+    return;
+  }
+  if (!supplementForm.authorized) {
+    supplementError.value = "请勾选资料授权后，再点提交。";
+    return;
+  }
+  const timeline = supplementForm.timeline
+    .map((event) => ({
+      year: event.year.trim(),
+      title: event.title.trim(),
+      description: event.description.trim(),
+    }))
+    .filter((event) => event.year && event.title);
+  const originalAnimal = animals.value.find((animal) => animal.id === supplementForm.animalId);
+  const hasContent = Boolean(
+    supplementForm.photos.length
+    || supplementFieldChanged(supplementForm.institution, originalAnimal?.institution)
+    || supplementFieldChanged(supplementForm.city, originalAnimal?.city)
+    || supplementForm.area.trim()
+    || supplementFieldChanged(supplementForm.birthDate, originalAnimal?.birthDate)
+    || supplementFieldChanged(supplementForm.birthPlace, originalAnimal?.birthPlace)
+    || supplementFieldChanged(supplementForm.father, originalAnimal?.father)
+    || supplementFieldChanged(supplementForm.mother, originalAnimal?.mother)
+    || supplementFieldChanged(supplementForm.sibling, originalAnimal?.sibling)
+    || supplementForm.relationshipNote.trim()
+    || supplementForm.summary.trim()
+    || timeline.length
+    || supplementForm.gender !== (originalAnimal?.gender || "未知"),
+  );
+  if (!hasContent) {
+    supplementError.value = "请至少填写一项新的个体资料，例如照片、展区、生日、家庭或一段说明。物种科普不用在这里重写。";
+    return;
+  }
+
+  try {
+    const photos: string[] = [];
+    for (const photo of supplementForm.photos) photos.push(await uploadMedia(photo));
+    const fields = {
+      institution: supplementForm.institution.trim(),
+      city: supplementForm.city.trim(),
+      area: supplementForm.area.trim(),
+      gender: supplementForm.gender,
+      birthDate: supplementForm.birthDate.trim(),
+      birthPlace: supplementForm.birthPlace.trim(),
+      father: supplementForm.father.trim(),
+      mother: supplementForm.mother.trim(),
+      sibling: supplementForm.sibling.trim(),
+      relationshipNote: supplementForm.relationshipNote.trim(),
+      summary: supplementForm.summary.trim(),
+      timeline,
+      photos,
+    };
+    const detailParts = [
+      fields.institution ? `机构：${fields.institution}` : "",
+      fields.birthDate ? `出生：${fields.birthDate}` : "",
+      fields.summary ? fields.summary : "",
+      timeline.length ? `新增时间线 ${timeline.length} 条` : "",
+      photos.length ? `照片 ${photos.length} 张` : "",
+    ].filter(Boolean);
+    const response = await postApi<{ submission: ApiSubmission }>("/api/submissions", {
+      type: "supplement",
+      animalId: supplementForm.animalId || undefined,
+      animalName: supplementForm.animalName || "待确认个体",
+      title: `补充资料：${supplementForm.animalName || "个体档案"}`,
+      details: detailParts.join("；") || "补充这只个体的资料",
+      mediaUrl: photos[0],
+      source: supplementForm.source.trim() || "投稿人补充",
+      copyright: supplementForm.copyright === "self" ? "本人原创自拍" : supplementForm.copyright === "authorized" ? "已获作者授权" : "仅后台线索",
+      payload: {
+        fields,
+        relatedSubmissionId: supplementForm.relatedSubmissionId || undefined,
+        missingAtSubmit: [...supplementHints.value.missing],
+      },
+    });
+    submissions.value.unshift(toSubmissionItem(response.submission));
+    triggerToast("补充资料已提交，审核通过后才会写入档案");
+    if (supplementReturnTo.value === "detail" && supplementForm.animalId && animals.value.some((animal) => animal.id === supplementForm.animalId)) {
+      openAnimal(supplementForm.animalId);
+    } else {
+      openView("my_submissions");
+    }
+  } catch (error) {
+    supplementError.value = error instanceof Error ? error.message : "补充资料提交失败";
+    triggerToast(supplementError.value);
   }
 }
 
@@ -812,10 +1168,14 @@ async function submitCorrection() {
     correctionForm.field === "gender"
       ? "性别纠错"
       : correctionForm.field === "age"
-        ? "出生年份/寿命纠错"
-        : correctionForm.field === "timeline"
-          ? "时间线大事件修正"
-          : "其他资料修正";
+        ? "生日或年份纠错"
+        : correctionForm.field === "name"
+          ? "名字或昵称纠错"
+          : correctionForm.field === "institution"
+            ? "所在机构纠错"
+            : correctionForm.field === "timeline"
+              ? "时间线大事件修正"
+              : "个体资料纠错";
   try {
     const details = `纠错详情：${correctionForm.text} | 佐证证据：${correctionForm.evidence} | 参考文献/来源：${correctionForm.citation || "暂无"}`;
     const response = await postApi<{ submission: ApiSubmission }>("/api/submissions", {
@@ -1126,7 +1486,8 @@ function useAiResultForRecommendation() {
   if (!ensureLoggedIn()) return;
   recommendForm.photo = aiState.image;
   recommendForm.name = aiState.resultName.replace(/[“”]/g, "").replace(/幼年记录|生日记录/g, "");
-  recommendForm.species = "小熊猫";
+  recommendForm.dontKnowName = false;
+  recommendForm.speciesCode = speciesItems.value.some((species) => species.id === "red-panda") ? "red-panda" : "";
   recommendForm.reasons.splice(0, recommendForm.reasons.length, "外貌特别");
   startRecommend();
   recommendStep.value = 2;
@@ -1477,7 +1838,7 @@ const observationBehaviors = [
             </button>
 
             <view class="action-grid">
-              <button class="action-card" @click="startRecommend">
+              <button class="action-card" @click="startRecommend()">
                 <view class="action-card__icon"><AhangIcon name="plus" :size="22" /></view>
                 <view>
                   <text class="action-card__title">推荐一只动物</text>
@@ -1558,19 +1919,31 @@ const observationBehaviors = [
           <view v-else-if="viewType === 'main' && mainTab === 'archives'" class="page">
             <view class="page-title-block">
               <text class="page-title">认识它们</text>
-              <text class="page-subtitle">每一只动物，都有属于自己的故事。</text>
+              <text class="page-subtitle">先看物种科学，再看属于这个物种的每一只个体。</text>
+            </view>
+            <view class="choice-row archive-mode">
+              <button :class="{ active: archiveMode === 'animals' }" @click="archiveMode = 'animals'">个体档案</button>
+              <button :class="{ active: archiveMode === 'species' }" @click="archiveMode = 'species'">物种库</button>
             </view>
             <view class="search-field">
               <AhangIcon name="search" :size="17" />
               <input
+                v-if="archiveMode === 'animals'"
                 v-model="archiveSearch"
                 class="search-field__input"
                 placeholder="搜索名字、物种、动物园或城市..."
                 confirm-type="search"
               />
-              <button v-if="archiveSearch" class="search-clear" @click="archiveSearch = ''">×</button>
+              <input
+                v-else
+                v-model="speciesSearch"
+                class="search-field__input"
+                placeholder="搜索中文名、英文名或拉丁名..."
+                confirm-type="search"
+              />
+              <button v-if="archiveMode === 'animals' ? archiveSearch : speciesSearch" class="search-clear" @click="archiveMode === 'animals' ? archiveSearch = '' : speciesSearch = ''">×</button>
             </view>
-            <scroll-view class="filter-scroll" scroll-x :show-scrollbar="false">
+            <scroll-view v-if="archiveMode === 'animals'" class="filter-scroll" scroll-x :show-scrollbar="false">
               <view class="filter-scroll__inner">
                 <button
                   v-for="filter in archiveFilters"
@@ -1584,7 +1957,33 @@ const observationBehaviors = [
               </view>
             </scroll-view>
 
-            <view v-if="filteredAnimals.length" class="animal-list">
+            <view v-if="archiveMode === 'species' && filteredSpeciesLibrary.length" class="animal-list">
+              <button
+                v-for="species in filteredSpeciesLibrary"
+                :key="species.id"
+                class="animal-list-card"
+                @click="openSpecies(species.id)"
+              >
+                <view class="animal-list-card__image">
+                  <AnimalImage :species="species.biologicalProfile.englishName" :src="speciesCardImage(species)" :alt="species.biologicalProfile.chineseName" />
+                </view>
+                <view class="animal-list-card__body">
+                  <view class="animal-list-card__top">
+                    <text class="animal-list-card__name">{{ species.biologicalProfile.chineseName }}</text>
+                    <text v-if="speciesAnimalCount(species.id) === 0" class="recruit-badge">{{ SPECIES_RECRUIT_TITLE }}</text>
+                    <text v-else class="soft-tag">{{ species.basicInfo.iucnStatus || "物种" }}</text>
+                  </view>
+                  <text class="animal-list-card__summary">{{ species.biologicalProfile.englishName }} · {{ species.biologicalProfile.latinName }}</text>
+                  <text class="animal-list-card__summary">已关联个体 {{ speciesAnimalCount(species.id) }} 只</text>
+                </view>
+              </button>
+            </view>
+            <view v-else-if="archiveMode === 'species'" class="empty-state">
+              <text class="empty-state__icon">⌕</text>
+              <text class="empty-state__title">物种库里没有匹配项</text>
+              <text class="empty-state__copy">可以换一个中文名、英文名或拉丁名。新的物种科学内容由编辑发布，不在个体投稿里填写。</text>
+            </view>
+            <view v-else-if="filteredAnimals.length" class="animal-list">
               <button
                 v-for="animal in filteredAnimals"
                 :key="animal.id"
@@ -1617,7 +2016,7 @@ const observationBehaviors = [
               <text class="empty-state__icon">⌕</text>
               <text class="empty-state__title">没有找到匹配档案</text>
               <text class="empty-state__copy">可以清除关键字或切换分类，也可以推荐一只新动物。</text>
-              <button class="button button--red button--small" @click="startRecommend">推荐新动物</button>
+              <button class="button button--red button--small" @click="startRecommend()">推荐新动物</button>
             </view>
           </view>
 
@@ -1626,6 +2025,7 @@ const observationBehaviors = [
             @recommend="startRecommend"
             @observe="startObservation()"
             @memory="openView('form_memory')"
+            @supplement="startSupplementFromHub"
             @correction="openCorrection()"
             @ai="openView('ai_helper')"
           />
@@ -1660,6 +2060,7 @@ const observationBehaviors = [
             :animal="selectedAnimal"
             :animals="animals"
             :species="selectedSpecies"
+            :species-peers="selectedSpeciesPeers"
             :memories="publicMemories"
             :comments="memorialComments"
             :favorited="selectedAnimalFavorited"
@@ -1670,6 +2071,7 @@ const observationBehaviors = [
             @correction="(id) => openCorrection(id, true)"
             @share="shareCurrentAnimal"
             @observe="startObservation"
+            @supplement="startSupplement"
             @open-animal="openAnimal"
             @notify="protectedNotify"
             @like-memory="toggleMemoryLikeById"
@@ -1681,9 +2083,53 @@ const observationBehaviors = [
             @login-required="ensureLoggedIn()"
           />
 
+          <view v-else-if="viewType === 'species_detail' && selectedSpeciesRecord" class="page">
+            <view class="nested-header">
+              <button @click="goMain('archives')"><UiImageIcon name="back" :size="24" tone="dark" /></button>
+              <view>
+                <text>{{ selectedSpeciesRecord.biologicalProfile.chineseName }}</text>
+                <text>{{ selectedSpeciesRecord.biologicalProfile.latinName }}</text>
+              </view>
+              <view />
+            </view>
+            <button
+              v-if="selectedSpeciesAnimals.length === 0"
+              class="recruit-banner"
+              @click="startRecommend(selectedSpeciesRecord.id)"
+            >
+              <text class="recruit-banner__title">{{ SPECIES_RECRUIT_TITLE }}</text>
+              <text class="recruit-banner__copy">{{ SPECIES_RECRUIT_SUBTITLE }}</text>
+            </button>
+            <view class="detail-section species-page-card">
+              <SpeciesProfileView :species="selectedSpeciesRecord" :animals="animals" :catalog="speciesItems" @notify="protectedNotify" />
+            </view>
+            <view class="detail-section">
+              <text class="detail-section__title">这个物种的个体 · {{ selectedSpeciesAnimals.length }} 只</text>
+              <view v-if="selectedSpeciesAnimals.length" class="animal-list">
+                <button v-for="animal in selectedSpeciesAnimals" :key="animal.id" class="animal-list-card" @click="openAnimal(animal.id)">
+                  <view class="animal-list-card__image">
+                    <AnimalImage :species="animal.species" :src="animal.image || animal.coverUrl" :alt="animal.name" />
+                  </view>
+                  <view class="animal-list-card__body">
+                    <view class="animal-list-card__top">
+                      <text class="animal-list-card__name">{{ animal.name }}</text>
+                      <StatusBadge :status="animal.status" :label="animal.statusLabel" />
+                    </view>
+                    <text class="animal-list-card__summary">{{ animal.institution }} · {{ animal.city }}</text>
+                  </view>
+                </button>
+              </view>
+              <view v-else class="empty-state empty-state--small">
+                <text>还没有关联到这个物种的个体</text>
+                <text>推荐建档时从物种库选中它，审核通过后就会出现在这里。</text>
+                <button class="button button--green button--small" @click="startRecommend(selectedSpeciesRecord.id)">推荐一只个体</button>
+              </view>
+            </view>
+          </view>
+
           <view v-else-if="viewType === 'recommend_animal'" class="page page--form">
             <view class="nested-header">
-              <button @click="recommendSubmitted ? goMain('archives') : recommendStep > 1 ? recommendStep-- : goMain('record')"><UiImageIcon name="back" :size="24" tone="dark" /></button>
+              <button @click="recommendSubmitted ? goMain('archives') : recommendStep > 1 ? recommendStep-- : leaveRecommend()"><UiImageIcon name="back" :size="24" tone="dark" /></button>
               <view><text>推荐新动物建档</text><text v-if="!recommendSubmitted">步骤 {{ recommendStep }} / 4</text></view>
               <button class="header-close" @click="goMain('record')">×</button>
             </view>
@@ -1693,12 +2139,12 @@ const observationBehaviors = [
               <text class="success-state__copy">感谢您的认真记录！这只动物已进入候选档案，审核志愿者会核验地点、物种、照片与来源。</text>
               <view class="recommend-summary">
                 <view><text>拟用名称 / 昵称</text><text>{{ recommendForm.dontKnowName ? "待核实" : (recommendForm.name || "未定") }}{{ recommendForm.nickname && !recommendForm.dontKnowName ? ` (${recommendForm.nickname})` : "" }}</text></view>
-                <view><text>推荐物种</text><text>{{ recommendForm.dontKnowName ? "未知/待确定" : (recommendForm.species || "待核实") }}</text></view>
+                <view><text>推荐物种</text><text>{{ recommendSpeciesLabel }}</text></view>
                 <view><text>见到地点</text><text>{{ recommendForm.uncertainLocation ? "不确定地点" : `${recommendForm.city} · ${recommendForm.zoo} (${recommendForm.area})` }}</text></view>
                 <view><text>推荐缘由</text><text>{{ recommendForm.reasons.join("、") }}</text></view>
               </view>
               <button class="button button--green" @click="goMain('archives')">查看候选动物档案</button>
-              <button class="outline-button outline-button--full" @click="startRecommend">继续推荐另一只动物</button>
+              <button class="outline-button outline-button--full" @click="startRecommend()">继续推荐另一只动物</button>
             </view>
             <view v-else class="step-progress">
               <view v-for="step in 4" :key="step" :class="{ active: recommendStep >= step }" />
@@ -1719,22 +2165,31 @@ const observationBehaviors = [
             <view v-else-if="!recommendSubmitted && recommendStep === 2" class="form-section">
               <text class="form-title">第二步：它是谁？</text>
               <text class="form-intro">如果知道它的名字、物种等信息请尽量提供，如完全不了解，也可以一键标记为不知道。</text>
-              <button class="checkbox-row" @click="recommendForm.dontKnowName = !recommendForm.dontKnowName">
+              <button v-if="!recommendLockedSpeciesId" class="checkbox-row" @click="toggleDontKnowSpecies">
                 <view :class="{ checked: recommendForm.dontKnowName }">{{ recommendForm.dontKnowName ? "✓" : "" }}</view>
-                <view class="checkbox-copy"><text>我不知道它是哪种动物，也没有任何名字线索</text><text>勾选后下方信息非必填，我们将交由专家和社区观察员帮您核实鉴定</text></view>
+                <view class="checkbox-copy"><text>我不知道它是哪种动物，也没有任何名字线索</text><text>勾选后物种记为“不确定 / 待核实”，由审核人员以后补上</text></view>
               </button>
+              <view v-else class="duplicate-hint">
+                <text>只为这个物种建立个体档案</text>
+                <text>物种已经选定，这里不能改物种科普。填写的是你见过的那一只。</text>
+              </view>
               <label class="field"><text>它的名字 / 称呼</text><input v-model="recommendForm.name" :disabled="recommendForm.dontKnowName" placeholder="如：迪迪、老大、大耳朵（若无固定称呼可不填）" /></label>
               <label class="field"><text>它的昵称 / 别名</text><input v-model="recommendForm.nickname" :disabled="recommendForm.dontKnowName" placeholder="如：齐刘海熊、偏分帅哥、广州一哥" /></label>
-              <label class="field"><text>物种名称 {{ recommendForm.dontKnowName ? "" : "*" }}</text><input v-model="recommendForm.species" :disabled="recommendForm.dontKnowName" placeholder="如：亚洲黑熊、金丝猴、华南虎、非洲狮" /></label>
+              <view class="field">
+                <text>物种 {{ recommendForm.dontKnowName ? "" : "*" }}</text>
+                <text class="field-hint">从在线物种库选择。科学内容由物种页统一维护，这里只关联到某一物种。</text>
+                <SpeciesSelect v-model="recommendForm.speciesCode" :species="speciesItems" :disabled="recommendForm.dontKnowName || Boolean(recommendLockedSpeciesId)" />
+              </view>
               <view class="field">
                 <text>性别</text>
                 <view class="choice-row">
                   <button v-for="gender in ['雄性', '雌性', '未知']" :key="gender" :disabled="recommendForm.dontKnowName" :class="{ active: recommendForm.dontKnowName ? gender === '未知' : recommendForm.gender === gender }" @click="recommendForm.gender = gender">{{ gender }}</button>
                 </view>
               </view>
-              <view class="duplicate-hint">
-                <text>发现可能重复的候选档案</text>
-                <text>系统检索到您推荐的地区「{{ recommendForm.zoo || "广州动物园" }}」可能已有符合描述的动物。推荐前建议先核实，避免数据重复。</text>
+              <view v-if="recommendDuplicates.length" class="duplicate-hint">
+                <text>同一物种已有这些个体</text>
+                <text v-for="animal in recommendDuplicates.slice(0, 4)" :key="animal.id">{{ animal.name }} · {{ animal.institution }}</text>
+                <text>如果就是其中一只，请回到档案给它补充资料，不必重复建档。</text>
               </view>
             </view>
 
@@ -1797,7 +2252,7 @@ const observationBehaviors = [
                 <text class="recommend-summary__title">请核对建档完整摘要（提交前预览）</text>
                 <view><text>1. 地点位置</text><text>{{ recommendForm.uncertainLocation ? "地点不确定（待核实）" : `${recommendForm.city} · ${recommendForm.zoo} (${recommendForm.area})` }}</text></view>
                 <view><text>2. 拟定名称</text><text>{{ recommendForm.dontKnowName ? "待核实" : `${recommendForm.name || "未命名"} (${recommendForm.nickname || "无昵称"})` }}</text></view>
-                <view><text>3. 物种及性别</text><text>{{ recommendForm.dontKnowName ? "待鉴定" : `${recommendForm.species} · ${recommendForm.gender}` }}</text></view>
+                <view><text>3. 物种及性别</text><text>{{ recommendSpeciesLabel }} · {{ recommendForm.dontKnowName ? "未知" : recommendForm.gender }}</text></view>
                 <view><text>4. 建档标签</text><text>{{ recommendForm.reasons.join("、") || "未勾选" }}</text></view>
                 <view><text>5. 故事/见闻（{{ recommendForm.story.length }}字）</text><text>“{{ recommendForm.story || "暂未填写故事描述..." }}”</text></view>
                 <view><text>6. 佐证照片</text><text>{{ recommendForm.photo ? "● 已上传（预览可用）" : "● 未上传" }}</text></view>
@@ -1808,6 +2263,87 @@ const observationBehaviors = [
             <view v-if="!recommendSubmitted" class="form-footer">
               <button v-if="recommendStep < 4" class="button button--red" @click="nextRecommendStep">继续</button>
               <button v-else class="button button--green" @click="submitRecommendation">提交推荐</button>
+            </view>
+          </view>
+
+          <view v-else-if="viewType === 'form_supplement'" class="page page--form page--single-form">
+            <view class="nested-header">
+              <button @click="leaveSupplement"><UiImageIcon name="back" :size="24" tone="dark" /></button>
+              <view><text>补充资料</text><text>{{ supplementForm.animalName || "个体档案" }}</text></view>
+              <button class="header-close" @click="goMain('record')">×</button>
+            </view>
+            <view class="form-section">
+              <text class="form-title">只补充这只个体</text>
+              <text class="form-intro">只填写这只个体的照片、机构、生日、家庭或说明。物种科普由编辑维护，这里不能改。</text>
+              <label class="field">
+                <text>要补充哪只个体 *</text>
+                <picker :range="animals" range-key="name" @change="onSupplementAnimalPick">
+                  <view class="picker-field">{{ supplementForm.animalName || "请选择已有档案" }} ›</view>
+                </picker>
+              </label>
+              <text v-if="supplementError" class="form-error">{{ supplementError }}</text>
+              <view v-if="supplementHints.adminComment" class="admin-comment">
+                <text>审核说明</text><text>{{ supplementHints.adminComment }}</text>
+              </view>
+              <view v-if="supplementHints.missing.length" class="duplicate-hint">
+                <text>还缺这些个体资料</text>
+                <text>{{ supplementHints.missing.join("、") }}</text>
+              </view>
+              <view class="field">
+                <text>个体照片（最多 3 张）</text>
+                <button class="upload-zone" @click="chooseImage('supplement')">
+                  <view><AhangIcon name="upload" :size="28" /><text>添加这只动物的照片</text><text>已选 {{ supplementForm.photos.length }} 张</text></view>
+                </button>
+                <view v-if="supplementForm.photos.length" class="supplement-photos">
+                  <view v-for="(photo, index) in supplementForm.photos" :key="photo">
+                    <image :src="photo" mode="aspectFill" />
+                    <button @click="removeSupplementPhoto(index)">移除</button>
+                  </view>
+                </view>
+              </view>
+              <view class="two-column-fields">
+                <label class="field"><text>所在城市</text><input v-model="supplementForm.city" placeholder="如：广州市" /></label>
+                <label class="field"><text>所在机构</text><input v-model="supplementForm.institution" placeholder="如：广州动物园" /></label>
+              </view>
+              <label class="field"><text>展区 / 馆舍</text><input v-model="supplementForm.area" placeholder="如：小熊猫馆、灵长区" /></label>
+              <label class="field"><text>出生日期</text><input v-model="supplementForm.birthDate" type="date" /></label>
+              <label class="field"><text>出生地</text><input v-model="supplementForm.birthPlace" placeholder="如：广州动物园" /></label>
+              <view class="field">
+                <text>性别</text>
+                <view class="choice-row">
+                  <button v-for="gender in ['雄性', '雌性', '未知']" :key="gender" :class="{ active: supplementForm.gender === gender }" @click="setSupplementGender(gender)">{{ gender }}</button>
+                </view>
+              </view>
+              <view class="two-column-fields">
+                <label class="field"><text>父亲</text><input v-model="supplementForm.father" placeholder="名字或未知" /></label>
+                <label class="field"><text>母亲</text><input v-model="supplementForm.mother" placeholder="名字或未知" /></label>
+              </view>
+              <label class="field"><text>同胞或其他亲属</text><input v-model="supplementForm.sibling" placeholder="如：同胎姐妹" /></label>
+              <label class="field"><text>关系说明</text><textarea v-model="supplementForm.relationshipNote" placeholder="例如：和贝贝长期生活在同一展区，是伴侣关系。" maxlength="300" /></label>
+              <view class="field">
+                <view class="field-label-row"><text>生命时间线</text><button class="section-link" @click="addSupplementTimeline">再加一条</button></view>
+                <view v-for="(event, index) in supplementForm.timeline" :key="index" class="timeline-editor">
+                  <input v-model="event.year" placeholder="年份，如 2016" />
+                  <input v-model="event.title" placeholder="事件，如 来到广州" />
+                  <textarea v-model="event.description" placeholder="这段经历只描述这只个体" maxlength="240" />
+                </view>
+              </view>
+              <label class="field"><text>对这只个体的补充说明</text><textarea v-model="supplementForm.summary" placeholder="写它自己的性格、外貌标记或经历，不要重复物种百科。" maxlength="500" /></label>
+              <label class="field"><text>公开来源（选填）</text><input v-model="supplementForm.source" placeholder="园方公告、新闻或观察日期" /></label>
+              <view class="license-options">
+                <button v-for="item in [
+                  { id: 'self', title: '本人原创自拍', copy: '由本人拍摄，可用于非营利档案展示' },
+                  { id: 'authorized', title: '已获作者授权', copy: '已取得原作者公开展示许可' },
+                  { id: 'cue_only', title: '仅后台线索', copy: '只供审核核验，不公开展示原图' },
+                ]" :key="item.id" :class="{ active: supplementForm.copyright === item.id }" @click="supplementForm.copyright = item.id">
+                  <view class="radio-dot" /><view><text>{{ item.title }}</text><text>{{ item.copy }}</text></view>
+                </button>
+              </view>
+              <button class="checkbox-row" @click="supplementForm.authorized = !supplementForm.authorized">
+                <view :class="{ checked: supplementForm.authorized }">{{ supplementForm.authorized ? "✓" : "" }}</view>
+                <text>我确认以上内容是这只个体的资料，并授权用于非营利档案。</text>
+              </button>
+              <button class="button button--green" @click="submitSupplement">提交补充，等待审核</button>
             </view>
           </view>
 
@@ -1975,13 +2511,15 @@ const observationBehaviors = [
                 </picker>
               </label>
               <view class="field">
-                <text>2. 纠错/补充的版块分类</text>
+                <text>2. 要纠正的个体资料</text>
+                <text class="field-hint">只能纠正这只个体的名字、性别、生日或时间。物种科普请到物种页联系编辑。</text>
                 <view class="choice-row choice-row--wrap">
                   <button v-for="field in [
+                    { id: 'name', label: '名字或昵称' },
                     { id: 'gender', label: '性别有误' },
-                    { id: 'age', label: '寿命/生卒年份' },
+                    { id: 'age', label: '生日或年份' },
+                    { id: 'institution', label: '所在机构' },
                     { id: 'timeline', label: '时间线大事件' },
-                    { id: 'other', label: '名称或常驻习性' },
                   ]" :key="field.id" :class="{ active: correctionForm.field === field.id }" @click="correctionForm.field = field.id">{{ field.label }}</button>
                 </view>
               </view>
@@ -2075,7 +2613,8 @@ const observationBehaviors = [
                 </view>
                 <view class="submission-card__footer">
                   <text>版权: {{ item.copyright || "待核验" }}</text>
-                  <text>点击查看详情 ›</text>
+                  <text v-if="item.status === 'need_supplement'" @click.stop="openSupplementFromSubmission(item)">去补充 ›</text>
+                  <text v-else>点击查看详情 ›</text>
                 </view>
               </button>
               <view v-if="!filteredSubmissions.length" class="empty-state empty-state--small">
@@ -2317,6 +2856,11 @@ const observationBehaviors = [
           <view class="submission-modal__metadata">
             <view><text>资料出处与载体</text><text>{{ selectedSubmission.source || "未提供" }}</text></view>
             <view><text>授权与版权范围</text><text>{{ selectedSubmission.copyright || "待核验" }}</text></view>
+          </view>
+          <button v-if="selectedSubmission.status === 'need_supplement'" class="button button--green button--small" @click="openSupplementFromSubmission(selectedSubmission)">去补充</button>
+          <view v-if="selectedSubmission.status === 'need_supplement'" class="duplicate-hint">
+            <text>需要补充的个体资料</text>
+            <text>{{ submissionMissingFields(selectedSubmission).join("、") || "请按审核说明补充" }}</text>
           </view>
           <button class="button button--dark button--small" @click="showSubmissionDetail = false">返回列表</button>
         </scroll-view>
@@ -4078,6 +4622,48 @@ const observationBehaviors = [
   padding: 18px 20px 0;
 }
 
+.archive-mode {
+  margin: 0 0 12px;
+}
+
+.species-page-card {
+  padding-bottom: 8px;
+}
+
+.supplement-photos {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.supplement-photos > view {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.supplement-photos image {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+}
+
+.supplement-photos button {
+  color: #b83b26;
+  font-size: 10px;
+}
+
+.timeline-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.timeline-editor textarea {
+  min-height: 72px;
+}
+
 .detail-section__title {
   color: #292524;
   font-family: Georgia, "Noto Serif SC", serif;
@@ -4269,6 +4855,15 @@ const observationBehaviors = [
   color: #78716c;
   font-size: 10px;
   line-height: 1.65;
+}
+
+.form-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #b83b26;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .form-subtitle {
@@ -5849,6 +6444,42 @@ const observationBehaviors = [
   .modal-backdrop {
     position: fixed;
   }
+}
+
+.recruit-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 16px;
+  background: #2f5233;
+  text-align: left;
+}
+
+.recruit-banner__title {
+  color: #f7f3ea;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.recruit-banner__copy {
+  color: #e4ecdf;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.recruit-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #2f5233;
+  color: #f7f3ea;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
 }
 
 @media (max-width: 350px) {

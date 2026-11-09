@@ -5,6 +5,18 @@ import mysql, {
   type ResultSetHeader,
   type RowDataPacket,
 } from "mysql2/promise";
+import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import { KOALA } from "../src/data/koala";
+import { applySpeciesContentPatch, PUMA } from "../src/data/speciesContentPatches";
+import { isRealPhotoUrl, speciesPhotoCandidates, withoutPlaceholderIllustrationCredit } from "../src/data/speciesCover";
+import { applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
+import {
+  animalWithSharedSpeciesLink,
+  isUncertainSpeciesCode,
+  resolveSpecies,
+  speciesLinkFields,
+  uncertainSpeciesFields,
+} from "../src/data/speciesResolver";
 import type {
   Animal,
   CandleStat,
@@ -81,7 +93,7 @@ export const MYSQL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS submissions (
     id VARCHAR(80) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,
-    type ENUM('recommend','observation','memory','correction','archive','task') NOT NULL,
+    type ENUM('recommend','observation','memory','correction','archive','task','supplement') NOT NULL,
     animal_id VARCHAR(80) NULL,
     animal_name VARCHAR(160) NOT NULL DEFAULT '',
     title VARCHAR(255) NOT NULL,
@@ -100,7 +112,7 @@ export const MYSQL_SCHEMA = [
     CONSTRAINT fk_submissions_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_submissions_reviewer FOREIGN KEY (reviewer_id) REFERENCES users(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-  `ALTER TABLE submissions MODIFY COLUMN type ENUM('recommend','observation','memory','correction','archive','task') NOT NULL`,
+  `ALTER TABLE submissions MODIFY COLUMN type ENUM('recommend','observation','memory','correction','archive','task','supplement') NOT NULL`,
   `CREATE TABLE IF NOT EXISTS collaboration_tasks (
     id VARCHAR(80) PRIMARY KEY,
     creator_id VARCHAR(64) NULL,
@@ -294,6 +306,15 @@ export class MysqlStore implements Store {
     for (const statement of MYSQL_SCHEMA) await this.pool.query(statement);
     await this.ensureMediaStorageColumns();
     await this.ensureAdmin();
+    await this.ensurePresetSpecies();
+    await this.upsertSpecies(PUMA, true);
+    await this.upsertSpecies(KOALA, true);
+    await this.ensureSpeciesAlias("african-lion", "白狮");
+    await this.ensureSpeciesAlias("koala", "树袋熊");
+    await this.ensureSpeciesAlias("koala", "koala");
+    await this.clearPlaceholderIllustrationCredits();
+    await this.fillBlankSpeciesContent();
+    await this.linkUnlinkedAnimals();
   }
 
   async close(): Promise<void> {
@@ -414,7 +435,7 @@ export class MysqlStore implements Store {
       `SELECT data_json FROM species WHERE ${where} ORDER BY chinese_name`,
       params,
     );
-    return rows.map((row) => parseJson<Species>(row.data_json));
+    return this.attachFallbackCovers(rows.map((row) => parseJson<Species>(row.data_json)));
   }
 
   async getSpecies(id: string): Promise<Species | null> {
@@ -422,7 +443,9 @@ export class MysqlStore implements Store {
       "SELECT data_json FROM species WHERE id = ? AND published = 1 LIMIT 1",
       [id],
     );
-    return rows[0] ? parseJson<Species>(rows[0].data_json) : null;
+    if (!rows[0]) return null;
+    const [species] = await this.attachFallbackCovers([parseJson<Species>(rows[0].data_json)]);
+    return species;
   }
 
   async saveSpecies(species: Species, operatorId: string): Promise<Species> {
@@ -1035,6 +1058,166 @@ export class MysqlStore implements Store {
     }
   }
 
+  private async ensurePresetSpecies(): Promise<void> {
+    await this.upsertSpecies(CHINESE_PANGOLIN, true);
+  }
+
+  /** Append one alias onto an existing species row. Other science fields stay as they are. */
+  private async ensureSpeciesAlias(speciesId: string, alias: string): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT data_json FROM species WHERE id = ? LIMIT 1",
+      [speciesId],
+    );
+    if (!rows[0]) return;
+    const species = parseJson<Species>(rows[0].data_json);
+    const aliases = new Set((species.aliases || []).map((item) => item.trim()).filter(Boolean));
+    if (aliases.has(alias) || species.biologicalProfile?.chineseName === alias) return;
+    aliases.add(alias);
+    species.aliases = [...aliases];
+    await this.pool.execute(
+      "UPDATE species SET data_json = ? WHERE id = ?",
+      [JSON.stringify(species), speciesId],
+    );
+  }
+
+  /** Fills blank species-science fields. Does not replace text an editor already saved. */
+  private async fillBlankSpeciesContent(): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT id, data_json FROM species",
+    );
+    for (const row of rows) {
+      const species = parseJson<Species>(row.data_json);
+      const patched = applySpeciesContentPatch(species);
+      if (!patched) continue;
+      await this.pool.execute(
+        "UPDATE species SET data_json = ? WHERE id = ?",
+        [JSON.stringify(patched), species.id],
+      );
+    }
+  }
+
+  /**
+   * Additive link only. Fills a missing speciesCode when the animal's existing
+   * names match the species library. Does not rewrite stories, photos, observations,
+   * submissions, or contributor records.
+   */
+  private async linkUnlinkedAnimals(): Promise<void> {
+    const catalog = await this.loadPublishedSpecies(this.pool);
+    const [rows] = await this.pool.query<RowDataPacket[]>("SELECT id, data_json FROM animals");
+    for (const row of rows) {
+      const animal = parseJson<Animal>(row.data_json);
+      const linked = animalWithSharedSpeciesLink(animal, catalog);
+      if (!linked) continue;
+      await this.pool.execute(
+        "UPDATE animals SET species_code = ?, species_name = ?, data_json = ? WHERE id = ?",
+        [linked.speciesCode || "", linked.species || "", JSON.stringify(linked), animal.id],
+      );
+    }
+  }
+
+  private async loadPublishedSpecies(connection: Pool | PoolConnection): Promise<Species[]> {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      "SELECT data_json FROM species WHERE published = 1",
+    );
+    return rows.map((row) => parseJson<Species>(row.data_json));
+  }
+
+  private async applyResolvedSpecies(animal: Animal, catalog: Species[]): Promise<void> {
+    if (isUncertainSpeciesCode(animal.speciesCode)) {
+      Object.assign(animal, uncertainSpeciesFields());
+      return;
+    }
+    const code = (animal.speciesCode || "").trim();
+    if (code && catalog.some((species) => species.id === code)) return;
+    const linked = animalWithSharedSpeciesLink(
+      { ...animal, speciesCode: "" },
+      catalog,
+    );
+    if (linked) Object.assign(animal, linked);
+  }
+
+  private async syncRecommendAnimalPayload(
+    connection: PoolConnection,
+    animalId: string,
+    fields: ReturnType<typeof readSupplementInput>,
+    catalog: Species[],
+  ): Promise<void> {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      `SELECT id, animal_name, payload_json FROM submissions
+       WHERE type = 'recommend' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.animal.id')) = ?
+       FOR UPDATE`,
+      [animalId],
+    );
+    for (const related of rows) {
+      const relatedPayload = parseJson<Record<string, unknown>>(related.payload_json);
+      if (!relatedPayload.animal || typeof relatedPayload.animal !== "object" || Array.isArray(relatedPayload.animal)) continue;
+      const animal = mergeIndividualSupplement(relatedPayload.animal as Animal, fields);
+      await this.applyResolvedSpecies(animal, catalog);
+      relatedPayload.animal = animal;
+      await connection.execute(
+        "UPDATE submissions SET animal_name = ?, payload_json = ? WHERE id = ?",
+        [animal.name || related.animal_name, JSON.stringify(relatedPayload), related.id],
+      );
+    }
+  }
+
+  private async publishSupplement(
+    connection: PoolConnection,
+    row: RowDataPacket,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const fields = readSupplementInput(payload);
+    const catalog = await this.loadPublishedSpecies(connection);
+    const animalId = typeof row.animal_id === "string" ? row.animal_id : "";
+    if (animalId) {
+      const [animalRows] = await connection.query<RowDataPacket[]>(
+        "SELECT data_json FROM animals WHERE id = ? FOR UPDATE",
+        [animalId],
+      );
+      if (animalRows[0]) {
+        const animal = mergeIndividualSupplement(parseJson<Animal>(animalRows[0].data_json), fields);
+        await this.applyResolvedSpecies(animal, catalog);
+        await connection.execute(
+          `UPDATE animals
+           SET name = ?, nickname = ?, species_code = ?, species_name = ?, institution = ?, city = ?, image_url = ?, summary = ?, data_json = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [
+            animal.name,
+            animal.nickname || "",
+            animal.speciesCode || "",
+            animal.species || "",
+            animal.institution || "",
+            animal.city || "",
+            animal.image || "",
+            animal.summary || animal.description || "",
+            JSON.stringify(animal),
+            animalId,
+          ],
+        );
+        await this.syncRecommendAnimalPayload(connection, animalId, fields, catalog);
+        return;
+      }
+    }
+
+    const relatedId = typeof payload.relatedSubmissionId === "string" ? payload.relatedSubmissionId.trim() : "";
+    if (!relatedId) return;
+    const [relatedRows] = await connection.query<RowDataPacket[]>(
+      "SELECT id, animal_name, payload_json FROM submissions WHERE id = ? FOR UPDATE",
+      [relatedId],
+    );
+    const related = relatedRows[0];
+    if (!related) return;
+    const relatedPayload = parseJson<Record<string, unknown>>(related.payload_json);
+    if (!relatedPayload.animal || typeof relatedPayload.animal !== "object" || Array.isArray(relatedPayload.animal)) return;
+    const animal = mergeIndividualSupplement(relatedPayload.animal as Animal, fields);
+    await this.applyResolvedSpecies(animal, catalog);
+    relatedPayload.animal = animal;
+    await connection.execute(
+      "UPDATE submissions SET animal_name = ?, payload_json = ? WHERE id = ?",
+      [animal.name || related.animal_name, JSON.stringify(relatedPayload), relatedId],
+    );
+  }
+
   private async upsertAnimal(animal: Animal, published: boolean, ignoreExisting = false): Promise<void> {
     const verb = ignoreExisting ? "INSERT IGNORE" : "INSERT";
     const update = ignoreExisting
@@ -1062,16 +1245,58 @@ export class MysqlStore implements Store {
   }
 
   private async upsertSpecies(species: Species, ignoreExisting = false): Promise<void> {
+    const stored: Species = { ...species };
+    delete stored.fallbackCover;
     const verb = ignoreExisting ? "INSERT IGNORE" : "INSERT";
     const update = ignoreExisting
       ? ""
       : "ON DUPLICATE KEY UPDATE chinese_name=VALUES(chinese_name), english_name=VALUES(english_name), latin_name=VALUES(latin_name), data_json=VALUES(data_json), published=1";
-    const profile = species.biologicalProfile;
+    const profile = stored.biologicalProfile;
     await this.pool.execute(
       `${verb} INTO species (id, chinese_name, english_name, latin_name, data_json, published)
        VALUES (?, ?, ?, ?, ?, 1) ${update}`,
-      [species.id, profile.chineseName, profile.englishName, profile.latinName, JSON.stringify(species)],
+      [stored.id, profile.chineseName, profile.englishName, profile.latinName, JSON.stringify(stored)],
     );
+  }
+
+  /** Drops the generated illustration credit. Does not change cover files or animal photos. */
+  private async clearPlaceholderIllustrationCredits(): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>("SELECT id, data_json FROM species");
+    for (const row of rows) {
+      const species = parseJson<Species>(row.data_json);
+      const next = withoutPlaceholderIllustrationCredit(species);
+      if (!next) continue;
+      delete next.fallbackCover;
+      await this.pool.execute("UPDATE species SET data_json = ? WHERE id = ?", [JSON.stringify(next), species.id]);
+    }
+  }
+
+  /** Read-only. A missing species cover can point at a photo already stored for that species. */
+  private async attachFallbackCovers(speciesList: Species[]): Promise<Species[]> {
+    if (!speciesList.length) return speciesList;
+    const [animalRows] = await this.pool.query<RowDataPacket[]>("SELECT id, data_json FROM animals");
+    const animals = animalRows.map((row) => parseJson<Animal>(row.data_json));
+    const [submissionRows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT animal_id, media_url, payload_json FROM submissions",
+    );
+    const submissionCover = new Map<string, string>();
+    for (const row of submissionRows) {
+      const payload = parseJson<Record<string, unknown>>(row.payload_json);
+      const payloadAnimal = payload.animal && typeof payload.animal === "object" && !Array.isArray(payload.animal)
+        ? payload.animal as Animal
+        : undefined;
+      const linkedAnimal = animals.find((animal) => animal.id === row.animal_id);
+      const speciesId = resolveSpecies(speciesList, linkedAnimal || payloadAnimal || { speciesCode: typeof payload.speciesCode === "string" ? payload.speciesCode : "" })?.id;
+      if (!speciesId || submissionCover.has(speciesId)) continue;
+      const photos = [row.media_url, payloadAnimal?.image, payloadAnimal?.coverUrl, ...(payloadAnimal?.gallery || [])]
+        .filter((url): url is string => isRealPhotoUrl(url));
+      if (photos[0]) submissionCover.set(speciesId, photos[0]);
+    }
+    return speciesList.map((species) => {
+      if (isRealPhotoUrl(species.coverImage)) return species;
+      const photo = speciesPhotoCandidates(species, animals, speciesList)[0] || submissionCover.get(species.id) || "";
+      return photo ? { ...species, fallbackCover: photo } : species;
+    });
   }
 
   private async getSubmission(id: string): Promise<SubmissionRecord | null> {
@@ -1211,8 +1436,29 @@ export class MysqlStore implements Store {
       );
       return;
     }
+    if (row.type === "correction" && row.animal_id) {
+      const [animalRows] = await connection.query<RowDataPacket[]>(
+        "SELECT data_json FROM animals WHERE id = ? FOR UPDATE",
+        [row.animal_id],
+      );
+      if (animalRows[0]) {
+        const field = typeof payload.field === "string" ? payload.field : undefined;
+        const animal = applyCorrectionToAnimal(parseJson<Animal>(animalRows[0].data_json), String(row.details || ""), field);
+        await connection.execute(
+          "UPDATE animals SET data_json = ?, updated_at = NOW() WHERE id = ?",
+          [JSON.stringify(animal), row.animal_id],
+        );
+      }
+      return;
+    }
+    if (row.type === "supplement") {
+      await this.publishSupplement(connection, row, payload);
+      return;
+    }
     if (row.type === "recommend" && payload.animal && typeof payload.animal === "object") {
       const animal = payload.animal as Animal;
+      await this.applyResolvedSpecies(animal, await this.loadPublishedSpecies(connection));
+      payload.animal = animal;
       await connection.execute(
         `INSERT INTO animals
          (id, name, nickname, species_code, species_name, status, institution, city, image_url, summary, data_json, published)
