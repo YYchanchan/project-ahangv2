@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import {
+  applySpeciesContentPatch,
+  ASIAN_ELEPHANT_DIET_WITH_FORAGING,
+  ASIAN_ELEPHANT_DIET_WITH_PREDATION,
+  PUMA,
+} from "../src/data/speciesContentPatches";
 import { applyCorrectionToAnimal, mergeIndividualSupplement, missingIndividualFields } from "../src/data/individualSupplement";
 import { resolveStandardSpeciesName } from "../src/data/speciesImageCatalog";
 import {
@@ -234,6 +240,68 @@ assert.equal(dede?.species, "白狮");
 assert.equal(dede?.commonName, "非洲狮");
 assert.equal(xiaowei, null);
 assert.equal(resolveSpecies(catalog, { species: "白狮" })?.id, "african-lion");
+
+const liveLion = applySpeciesContentPatch({
+  ...lion,
+  basicInfo: { ...lion.basicInfo, wildLifespan: "" },
+  faqs: [{ q: "白狮是不是独立物种？", a: "原有回答" }],
+  extendedReading: { ...lion.extendedReading, articles: ["已有文章"] },
+  wildVsZoo: [{ title: "食物来源 Diet & Feeding", wild: "已有", zoo: "已有" }],
+});
+assert.equal(liveLion?.basicInfo.wildLifespan?.includes("10"), true);
+assert.equal(liveLion?.faqs[0].q, "白狮是不是独立物种？");
+assert.ok((liveLion?.faqs.length || 0) > 1);
+assert.equal(liveLion?.wildVsZoo?.[0].wild, "已有");
+assert.equal(applySpeciesContentPatch({
+  ...lion,
+  basicInfo: { ...lion.basicInfo, wildLifespan: "编辑写过的寿命" },
+  faqs: liveLion?.faqs || [],
+  extendedReading: liveLion?.extendedReading || lion.extendedReading,
+  wildVsZoo: liveLion?.wildVsZoo,
+}) , null);
+
+const elephant = applySpeciesContentPatch({
+  ...lion,
+  id: "asian-elephant",
+  basicInfo: { ...lion.basicInfo, diet: ASIAN_ELEPHANT_DIET_WITH_PREDATION, wildLifespan: "50 — 60 年" },
+  wildVsZoo: [],
+});
+assert.equal(elephant?.basicInfo.diet, ASIAN_ELEPHANT_DIET_WITH_FORAGING);
+assert.equal(elephant?.basicInfo.wildLifespan, "50 — 60 年");
+assert.equal(applySpeciesContentPatch({
+  ...lion,
+  id: "asian-elephant",
+  basicInfo: { ...lion.basicInfo, diet: "编辑改过的食性", wildLifespan: "50 — 60 年" },
+  wildVsZoo: [{ title: "自写对比", wild: "甲", zoo: "乙" }],
+})?.basicInfo.diet, "编辑改过的食性");
+
+const macaque = applySpeciesContentPatch({
+  ...lion,
+  id: "rhesus-macaque",
+  characteristics: [{ title: "精细的阶级社会", description: "原有" }],
+  basicInfo: { ...lion.basicInfo, wildLifespan: "15 — 20 年" },
+});
+assert.equal(macaque?.characteristics[0].title, "精细的阶级社会");
+assert.ok((macaque?.characteristics.length || 0) >= 3);
+assert.equal(applySpeciesContentPatch(macaque!) , null);
+
+const pumaCatalog = [...catalog, PUMA];
+const xiaoweiLinked = animalWithSharedSpeciesLink(animal({
+  id: "xiaowei",
+  name: "小微",
+  species: "美洲狮",
+  speciesCode: "",
+  description: "小微自己的故事",
+}), pumaCatalog);
+assert.equal(xiaoweiLinked?.speciesCode, "puma");
+assert.equal(xiaoweiLinked?.species, "美洲狮");
+assert.equal(xiaoweiLinked?.description, "小微自己的故事");
+assert.equal(animalWithSharedSpeciesLink(animal({
+  id: "xiaowei",
+  name: "小微",
+  species: "美洲狮",
+  speciesCode: "",
+}), catalog), null);
 
 const corrected = applyCorrectionToAnimal(dundun, "出生年份应为2016年", "age");
 assert.equal(corrected.timeline.length, 1);

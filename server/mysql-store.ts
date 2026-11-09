@@ -6,6 +6,7 @@ import mysql, {
   type RowDataPacket,
 } from "mysql2/promise";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import { applySpeciesContentPatch, PUMA } from "../src/data/speciesContentPatches";
 import { applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
 import {
   animalWithSharedSpeciesLink,
@@ -304,7 +305,9 @@ export class MysqlStore implements Store {
     await this.ensureMediaStorageColumns();
     await this.ensureAdmin();
     await this.ensurePresetSpecies();
+    await this.upsertSpecies(PUMA, true);
     await this.ensureSpeciesAlias("african-lion", "白狮");
+    await this.fillBlankSpeciesContent();
     await this.linkUnlinkedAnimals();
   }
 
@@ -1067,6 +1070,22 @@ export class MysqlStore implements Store {
       "UPDATE species SET data_json = ? WHERE id = ?",
       [JSON.stringify(species), speciesId],
     );
+  }
+
+  /** Fills blank species-science fields. Does not replace text an editor already saved. */
+  private async fillBlankSpeciesContent(): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT id, data_json FROM species",
+    );
+    for (const row of rows) {
+      const species = parseJson<Species>(row.data_json);
+      const patched = applySpeciesContentPatch(species);
+      if (!patched) continue;
+      await this.pool.execute(
+        "UPDATE species SET data_json = ? WHERE id = ?",
+        [JSON.stringify(patched), species.id],
+      );
+    }
   }
 
   /**
