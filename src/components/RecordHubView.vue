@@ -45,7 +45,7 @@ function choose(id: (typeof options)[number]["id"]) {
       </button>
     </view>
 
-    <button class="correction-link" @click="emit('correction')">档案里的事实有误？提交一条纠错</button>
+    <button class="correction-link" @click="emit('correction')">这只个体的名字、性别或时间有误？提交一条纠错</button>
 
     <view class="ai-entry">
       <view>

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { EDITOR_WECHAT_ID, EDITOR_WECHAT_LABEL } from "../src/data/contact";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import { speciesScienceRejection } from "../src/data/speciesSubmissionGuard";
 import {
   applySpeciesContentPatch,
   ASIAN_ELEPHANT_DIET_WITH_FORAGING,
@@ -158,7 +160,7 @@ const pangolin = animal({
 });
 assert.ok(missingIndividualFields(pangolin).includes("物种关联") === false);
 assert.ok(missingIndividualFields(pangolin).includes("所在机构"));
-assert.ok(missingIndividualFields(animal({ id: "x", name: "待核实", speciesCode: UNCERTAIN_SPECIES_CODE })).includes("物种关联"));
+assert.equal(missingIndividualFields(animal({ id: "x", name: "待核实", speciesCode: UNCERTAIN_SPECIES_CODE })).includes("物种关联"), false);
 
 const merged = mergeIndividualSupplement(pangolin, {
   institution: "广州动物园",
@@ -302,6 +304,28 @@ assert.equal(animalWithSharedSpeciesLink(animal({
   species: "美洲狮",
   speciesCode: "",
 }), catalog), null);
+assert.equal(EDITOR_WECHAT_ID, "18688884927");
+assert.equal(EDITOR_WECHAT_LABEL, "添加微信：18688884927");
+assert.equal(speciesScienceRejection({
+  type: "supplement",
+  payload: { fields: { birthDate: "2016-05-01", summary: "左耳有缺口" } },
+}), null);
+assert.ok(speciesScienceRejection({
+  type: "supplement",
+  payload: { fields: { speciesCode: "african-lion", species: "African Lion" } },
+}));
+assert.ok(speciesScienceRejection({
+  type: "correction",
+  payload: { field: "diet", biologicalProfile: { chineseName: "非洲狮" } },
+}));
+assert.equal(speciesScienceRejection({
+  type: "recommend",
+  payload: { animal: { species: "白狮", speciesCode: "", name: "得得" } },
+}), null);
+assert.equal(speciesScienceRejection({
+  type: "correction",
+  payload: { field: "name", evidence: "园方名牌" },
+}), null);
 
 const corrected = applyCorrectionToAnimal(dundun, "出生年份应为2016年", "age");
 assert.equal(corrected.timeline.length, 1);

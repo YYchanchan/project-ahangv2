@@ -227,7 +227,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
       <view>
         <text>补充这只个体的资料</text>
         <text v-if="species">可以补充照片、机构、生日、家庭关系和时间线。野外与动物园对比属于物种页，不用在这里重写。</text>
-        <text v-else>还没有关联到物种库，所以暂时看不到生物身份证和野外 / 动物园对比。点“补充资料”即可选择物种，或标成待核实。</text>
+        <text v-else>还没有关联到物种库，所以暂时看不到生物身份证和野外 / 动物园对比。物种由编辑关联，这里只能补充这只个体自己的资料。</text>
       </view>
       <button @click="emit('supplement', animal.id)">补充资料</button>
     </view>

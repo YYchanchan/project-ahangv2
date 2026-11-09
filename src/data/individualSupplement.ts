@@ -1,5 +1,5 @@
 import type { Animal, AnimalTimelineEvent } from "../types";
-import { UNCERTAIN_SPECIES_CODE, isUncertainSpeciesCode } from "./speciesResolver";
+import { UNCERTAIN_SPECIES_CODE } from "./speciesResolver";
 
 export interface IndividualSupplementInput {
   name?: string;
@@ -51,7 +51,6 @@ export function missingIndividualFields(animal?: Partial<Animal> | null): string
   );
   if (!hasFamily) missing.push("家庭或同伴关系");
   if (!animal.timeline?.length) missing.push("生命时间线");
-  if (!animal.speciesCode?.trim() || isUncertainSpeciesCode(animal.speciesCode)) missing.push("物种关联");
   return missing;
 }
 

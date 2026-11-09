@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { EDITOR_WECHAT_ID, EDITOR_WECHAT_LABEL } from "../data/contact";
 import type { Species } from "../types";
 
 const props = defineProps<{
@@ -10,6 +11,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   notify: [message: string];
 }>();
+
+function copyEditorWechat() {
+  uni.setClipboardData({
+    data: EDITOR_WECHAT_ID,
+    success: () => emit("notify", "已复制微信号"),
+    fail: () => emit("notify", "没能复制微信号，请长按手动复制"),
+  });
+}
 
 const profile = computed(() => props.species.biologicalProfile);
 
@@ -76,8 +85,8 @@ const readingGroups = computed(() => {
       <text>🔬</text>
       <view>
         <text>认识这个物种</text>
-        <text v-if="anchorName">通过 {{ anchorName }}，认识 {{ profile.chineseName }}。这份科普来自同一条物种记录，同一物种的每只个体都显示它；编辑一次，全部同步。</text>
-        <text v-else>{{ profile.englishName }} · {{ profile.latinName }}。同一物种的每只个体都显示这份科普。</text>
+        <text v-if="anchorName">通过 {{ anchorName }}，认识 {{ profile.chineseName }}。这份科普由编辑统一维护，同一物种的每只个体都显示同一份。</text>
+        <text v-else>{{ profile.englishName }} · {{ profile.latinName }}。这份科普由编辑统一维护。</text>
       </view>
     </view>
 
@@ -156,6 +165,12 @@ const readingGroups = computed(() => {
         <text v-for="item in group.items" :key="item">{{ item }}</text>
       </view>
     </view>
+
+    <view class="species-contact">
+      <text>发现错误？联系我们</text>
+      <text>{{ EDITOR_WECHAT_LABEL }}</text>
+      <button @click="copyEditorWechat">复制微信号</button>
+    </view>
   </view>
 </template>
 
@@ -175,6 +190,34 @@ button::after {
 .species-profile {
   display: flex;
   flex-direction: column;
+}
+
+.species-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid #f0ece7;
+}
+
+.species-contact text:first-child {
+  color: #78716c;
+  font-size: 11px;
+}
+
+.species-contact text:nth-child(2) {
+  color: #292524;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.species-contact button {
+  align-self: flex-start;
+  margin-top: 4px;
+  color: #2f5233;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .species-heading {

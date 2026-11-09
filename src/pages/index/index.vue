@@ -1022,14 +1022,7 @@ async function submitSupplement() {
       description: event.description.trim(),
     }))
     .filter((event) => event.year && event.title);
-  const picked = speciesItems.value.find((species) => species.id === supplementForm.speciesCode);
-  const identity = !supplementForm.speciesCode
-    ? undefined
-    : isUncertainSpeciesCode(supplementForm.speciesCode) || !picked
-      ? uncertainSpeciesFields()
-      : speciesLinkFields(picked);
   const originalAnimal = animals.value.find((animal) => animal.id === supplementForm.animalId);
-  const speciesChanged = Boolean(identity && identity.speciesCode !== (originalAnimal?.speciesCode || ""));
   const hasContent = Boolean(
     supplementForm.photos.length
     || supplementFieldChanged(supplementForm.institution, originalAnimal?.institution)
@@ -1043,8 +1036,7 @@ async function submitSupplement() {
     || supplementForm.relationshipNote.trim()
     || supplementForm.summary.trim()
     || timeline.length
-    || supplementForm.gender !== (originalAnimal?.gender || "未知")
-    || speciesChanged,
+    || supplementForm.gender !== (originalAnimal?.gender || "未知"),
   );
   if (!hasContent) {
     supplementError.value = "请至少填写一项新的个体资料，例如照片、展区、生日、家庭或一段说明。物种科普不用在这里重写。";
@@ -1068,10 +1060,8 @@ async function submitSupplement() {
       summary: supplementForm.summary.trim(),
       timeline,
       photos,
-      ...(identity || {}),
     };
     const detailParts = [
-      identity ? `物种：${identity.commonName || identity.species}` : "",
       fields.institution ? `机构：${fields.institution}` : "",
       fields.birthDate ? `出生：${fields.birthDate}` : "",
       fields.summary ? fields.summary : "",
@@ -1154,10 +1144,14 @@ async function submitCorrection() {
     correctionForm.field === "gender"
       ? "性别纠错"
       : correctionForm.field === "age"
-        ? "出生年份/寿命纠错"
-        : correctionForm.field === "timeline"
-          ? "时间线大事件修正"
-          : "其他资料修正";
+        ? "生日或年份纠错"
+        : correctionForm.field === "name"
+          ? "名字或昵称纠错"
+          : correctionForm.field === "institution"
+            ? "所在机构纠错"
+            : correctionForm.field === "timeline"
+              ? "时间线大事件修正"
+              : "个体资料纠错";
   try {
     const details = `纠错详情：${correctionForm.text} | 佐证证据：${correctionForm.evidence} | 参考文献/来源：${correctionForm.citation || "暂无"}`;
     const response = await postApi<{ submission: ApiSubmission }>("/api/submissions", {
@@ -2243,7 +2237,7 @@ const observationBehaviors = [
             </view>
             <view class="form-section">
               <text class="form-title">只补充这只个体</text>
-              <text class="form-intro">照片、机构、生日、家庭关系和时间线写在这里。野外与动物园对比、生物分类等科普由编辑维护在物种库里，同一物种的每只个体都会显示那一份，不用在这里重写。</text>
+              <text class="form-intro">只填写这只个体的照片、机构、生日、家庭或说明。物种科普由编辑维护，这里不能改。</text>
               <label class="field">
                 <text>要补充哪只个体 *</text>
                 <picker :range="animals" range-key="name" @change="onSupplementAnimalPick">
@@ -2257,11 +2251,6 @@ const observationBehaviors = [
               <view v-if="supplementHints.missing.length" class="duplicate-hint">
                 <text>还缺这些个体资料</text>
                 <text>{{ supplementHints.missing.join("、") }}</text>
-              </view>
-              <view class="field">
-                <text>关联物种</text>
-                <text class="field-hint">选中后会保存物种编号和中文、英文、拉丁名。不确定就选“待核实”。</text>
-                <SpeciesSelect v-model="supplementForm.speciesCode" :species="speciesItems" />
               </view>
               <view class="field">
                 <text>个体照片（最多 3 张）</text>
@@ -2485,13 +2474,15 @@ const observationBehaviors = [
                 </picker>
               </label>
               <view class="field">
-                <text>2. 纠错/补充的版块分类</text>
+                <text>2. 要纠正的个体资料</text>
+                <text class="field-hint">只能纠正这只个体的名字、性别、生日或时间。物种科普请到物种页联系编辑。</text>
                 <view class="choice-row choice-row--wrap">
                   <button v-for="field in [
+                    { id: 'name', label: '名字或昵称' },
                     { id: 'gender', label: '性别有误' },
-                    { id: 'age', label: '寿命/生卒年份' },
+                    { id: 'age', label: '生日或年份' },
+                    { id: 'institution', label: '所在机构' },
                     { id: 'timeline', label: '时间线大事件' },
-                    { id: 'other', label: '名称或常驻习性' },
                   ]" :key="field.id" :class="{ active: correctionForm.field === field.id }" @click="correctionForm.field = field.id">{{ field.label }}</button>
                 </view>
               </view>
