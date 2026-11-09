@@ -13,6 +13,7 @@ import StatusBadge from "../../components/StatusBadge.vue";
 import UiImageIcon from "../../components/UiImageIcon.vue";
 import { missingIndividualFields } from "../../data/individualSupplement";
 import { SPECIES_RECRUIT_SUBTITLE, SPECIES_RECRUIT_TITLE } from "../../data/speciesRecruitment";
+import { resolveSpeciesCover } from "../../data/speciesCover";
 import {
   isUncertainSpeciesCode,
   resolveSpecies,
@@ -679,6 +680,11 @@ function openSpecies(id: string) {
 
 function speciesAnimalCount(speciesId: string): number {
   return animals.value.filter((animal) => resolveSpecies(speciesItems.value, animal)?.id === speciesId).length;
+}
+
+function speciesCardImage(species: Species): string {
+  const cover = resolveSpeciesCover(species, animals.value, speciesItems.value);
+  return cover.kind === "placeholder" ? "" : cover.src;
 }
 
 function toggleRecommendReason(reason: string) {
@@ -1959,7 +1965,7 @@ const observationBehaviors = [
                 @click="openSpecies(species.id)"
               >
                 <view class="animal-list-card__image">
-                  <AnimalImage :species="species.biologicalProfile.englishName" :alt="species.biologicalProfile.chineseName" />
+                  <AnimalImage :species="species.biologicalProfile.englishName" :src="speciesCardImage(species)" :alt="species.biologicalProfile.chineseName" />
                 </view>
                 <view class="animal-list-card__body">
                   <view class="animal-list-card__top">
@@ -2095,7 +2101,7 @@ const observationBehaviors = [
               <text class="recruit-banner__copy">{{ SPECIES_RECRUIT_SUBTITLE }}</text>
             </button>
             <view class="detail-section species-page-card">
-              <SpeciesProfileView :species="selectedSpeciesRecord" @notify="protectedNotify" />
+              <SpeciesProfileView :species="selectedSpeciesRecord" :animals="animals" :catalog="speciesItems" @notify="protectedNotify" />
             </view>
             <view class="detail-section">
               <text class="detail-section__title">这个物种的个体 · {{ selectedSpeciesAnimals.length }} 只</text>

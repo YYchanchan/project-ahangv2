@@ -2,11 +2,14 @@
 import { computed } from "vue";
 import { EDITOR_WECHAT_ID, EDITOR_WECHAT_LABEL } from "../data/contact";
 import { speciesCreditLine, speciesCreditSource } from "../data/speciesImageCredit";
+import { resolveSpeciesCover } from "../data/speciesCover";
 import { getSpeciesDefaultImage } from "../data/speciesImages";
-import type { Species } from "../types";
+import type { Animal, Species } from "../types";
 
 const props = defineProps<{
   species: Species;
+  animals?: Animal[];
+  catalog?: Species[];
   anchorName?: string;
 }>();
 
@@ -23,14 +26,10 @@ function copyEditorWechat() {
 }
 
 const profile = computed(() => props.species.biologicalProfile);
-const creditText = computed(() => speciesCreditLine(props.species.imageCredit));
-const creditSource = computed(() => speciesCreditSource(props.species.imageCredit));
-const coverSrc = computed(() => {
-  const uploaded = props.species.coverImage?.trim();
-  if (uploaded) return uploaded;
-  if (!creditText.value && !creditSource.value) return "";
-  return getSpeciesDefaultImage(profile.value.englishName || profile.value.chineseName);
-});
+const coverChoice = computed(() => resolveSpeciesCover(props.species, props.animals || [], props.catalog || [props.species]));
+const coverSrc = computed(() => coverChoice.value.src || getSpeciesDefaultImage(profile.value.englishName || profile.value.chineseName));
+const creditText = computed(() => (coverChoice.value.kind === "cover" ? speciesCreditLine(coverChoice.value.credit) : ""));
+const creditSource = computed(() => (coverChoice.value.kind === "cover" ? speciesCreditSource(coverChoice.value.credit) : ""));
 
 const speciesBasicInfo = computed(() => {
   const info = props.species.basicInfo;

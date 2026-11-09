@@ -3,6 +3,7 @@ import { EDITOR_WECHAT_ID, EDITOR_WECHAT_LABEL } from "../src/data/contact";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
 import { KOALA } from "../src/data/koala";
 import { speciesCreditLine } from "../src/data/speciesImageCredit";
+import { resolveSpeciesCover, withoutPlaceholderIllustrationCredit } from "../src/data/speciesCover";
 import { SPECIES_RECRUIT_SUBTITLE, SPECIES_RECRUIT_TITLE } from "../src/data/speciesRecruitment";
 import { speciesScienceRejection } from "../src/data/speciesSubmissionGuard";
 import {
@@ -350,7 +351,40 @@ assert.equal(animalWithSharedSpeciesLink(animal({
 }), koalaCatalog)?.speciesCode, "koala");
 assert.equal(KOALA.basicInfo.diet.includes("桉"), true);
 assert.equal(KOALA.basicInfo.citesStatus.includes("未列入"), true);
-assert.equal(speciesCreditLine(KOALA.imageCredit), "阿杭计划 · 原创示意插画，不是野外或园内实拍");
+assert.equal(KOALA.coverImage, undefined);
+assert.equal(KOALA.imageCredit, undefined);
+const koalaWithPhoto = animal({
+  id: "yuanyuan-photo",
+  name: "圆圆",
+  species: "考拉",
+  speciesCode: "koala",
+  image: "/uploads/animals/yuanyuan.jpg",
+  imageType: "real",
+});
+const koalaCover = resolveSpeciesCover(KOALA, [koalaWithPhoto], koalaCatalog);
+assert.equal(koalaCover.kind, "photo");
+assert.equal(koalaCover.src, "/uploads/animals/yuanyuan.jpg");
+assert.equal(koalaCover.credit, undefined);
+const explicit = resolveSpeciesCover({
+  ...KOALA,
+  coverImage: "/uploads/species/koala-editor.jpg",
+  imageCredit: { author: "园方", license: "CC BY 4.0", sourceUrl: "https://example.test/koala" },
+}, [koalaWithPhoto], koalaCatalog);
+assert.equal(explicit.kind, "cover");
+assert.equal(explicit.src, "/uploads/species/koala-editor.jpg");
+assert.equal(speciesCreditLine(explicit.credit), "园方 · CC BY 4.0");
+assert.equal(resolveSpeciesCover(KOALA, [], koalaCatalog).kind, "placeholder");
+const cleared = withoutPlaceholderIllustrationCredit({
+  ...KOALA,
+  imageCredit: { author: "阿杭计划", license: "原创示意插画，不是野外或园内实拍", sourceUrl: "" },
+});
+assert.equal(cleared?.imageCredit, undefined);
+assert.equal(cleared?.coverImage, undefined);
+assert.equal(withoutPlaceholderIllustrationCredit({
+  ...KOALA,
+  coverImage: "/uploads/species/keep.jpg",
+  imageCredit: { author: "阿杭计划", license: "原创示意插画，不是野外或园内实拍" },
+}), null);
 assert.equal(SPECIES_RECRUIT_TITLE, "寻找第一位成员");
 assert.equal(SPECIES_RECRUIT_SUBTITLE, "你在哪里见过它？告诉我们");
 assert.equal(resolveStandardSpeciesName("树袋熊"), "Koala");

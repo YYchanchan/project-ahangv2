@@ -8,6 +8,7 @@ import mysql, {
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
 import { KOALA } from "../src/data/koala";
 import { applySpeciesContentPatch, PUMA } from "../src/data/speciesContentPatches";
+import { isRealPhotoUrl, speciesPhotoCandidates, withoutPlaceholderIllustrationCredit } from "../src/data/speciesCover";
 import { applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
 import {
   animalWithSharedSpeciesLink,
@@ -311,6 +312,7 @@ export class MysqlStore implements Store {
     await this.ensureSpeciesAlias("african-lion", "白狮");
     await this.ensureSpeciesAlias("koala", "树袋熊");
     await this.ensureSpeciesAlias("koala", "koala");
+    await this.clearPlaceholderIllustrationCredits();
     await this.fillBlankSpeciesContent();
     await this.linkUnlinkedAnimals();
   }
@@ -433,7 +435,7 @@ export class MysqlStore implements Store {
       `SELECT data_json FROM species WHERE ${where} ORDER BY chinese_name`,
       params,
     );
-    return rows.map((row) => parseJson<Species>(row.data_json));
+    return this.attachFallbackCovers(rows.map((row) => parseJson<Species>(row.data_json)));
   }
 
   async getSpecies(id: string): Promise<Species | null> {
@@ -441,7 +443,9 @@ export class MysqlStore implements Store {
       "SELECT data_json FROM species WHERE id = ? AND published = 1 LIMIT 1",
       [id],
     );
-    return rows[0] ? parseJson<Species>(rows[0].data_json) : null;
+    if (!rows[0]) return null;
+    const [species] = await this.attachFallbackCovers([parseJson<Species>(rows[0].data_json)]);
+    return species;
   }
 
   async saveSpecies(species: Species, operatorId: string): Promise<Species> {
@@ -1241,16 +1245,58 @@ export class MysqlStore implements Store {
   }
 
   private async upsertSpecies(species: Species, ignoreExisting = false): Promise<void> {
+    const stored: Species = { ...species };
+    delete stored.fallbackCover;
     const verb = ignoreExisting ? "INSERT IGNORE" : "INSERT";
     const update = ignoreExisting
       ? ""
       : "ON DUPLICATE KEY UPDATE chinese_name=VALUES(chinese_name), english_name=VALUES(english_name), latin_name=VALUES(latin_name), data_json=VALUES(data_json), published=1";
-    const profile = species.biologicalProfile;
+    const profile = stored.biologicalProfile;
     await this.pool.execute(
       `${verb} INTO species (id, chinese_name, english_name, latin_name, data_json, published)
        VALUES (?, ?, ?, ?, ?, 1) ${update}`,
-      [species.id, profile.chineseName, profile.englishName, profile.latinName, JSON.stringify(species)],
+      [stored.id, profile.chineseName, profile.englishName, profile.latinName, JSON.stringify(stored)],
     );
+  }
+
+  /** Drops the generated illustration credit. Does not change cover files or animal photos. */
+  private async clearPlaceholderIllustrationCredits(): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>("SELECT id, data_json FROM species");
+    for (const row of rows) {
+      const species = parseJson<Species>(row.data_json);
+      const next = withoutPlaceholderIllustrationCredit(species);
+      if (!next) continue;
+      delete next.fallbackCover;
+      await this.pool.execute("UPDATE species SET data_json = ? WHERE id = ?", [JSON.stringify(next), species.id]);
+    }
+  }
+
+  /** Read-only. A missing species cover can point at a photo already stored for that species. */
+  private async attachFallbackCovers(speciesList: Species[]): Promise<Species[]> {
+    if (!speciesList.length) return speciesList;
+    const [animalRows] = await this.pool.query<RowDataPacket[]>("SELECT id, data_json FROM animals");
+    const animals = animalRows.map((row) => parseJson<Animal>(row.data_json));
+    const [submissionRows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT animal_id, media_url, payload_json FROM submissions",
+    );
+    const submissionCover = new Map<string, string>();
+    for (const row of submissionRows) {
+      const payload = parseJson<Record<string, unknown>>(row.payload_json);
+      const payloadAnimal = payload.animal && typeof payload.animal === "object" && !Array.isArray(payload.animal)
+        ? payload.animal as Animal
+        : undefined;
+      const linkedAnimal = animals.find((animal) => animal.id === row.animal_id);
+      const speciesId = resolveSpecies(speciesList, linkedAnimal || payloadAnimal || { speciesCode: typeof payload.speciesCode === "string" ? payload.speciesCode : "" })?.id;
+      if (!speciesId || submissionCover.has(speciesId)) continue;
+      const photos = [row.media_url, payloadAnimal?.image, payloadAnimal?.coverUrl, ...(payloadAnimal?.gallery || [])]
+        .filter((url): url is string => isRealPhotoUrl(url));
+      if (photos[0]) submissionCover.set(speciesId, photos[0]);
+    }
+    return speciesList.map((species) => {
+      if (isRealPhotoUrl(species.coverImage)) return species;
+      const photo = speciesPhotoCandidates(species, animals, speciesList)[0] || submissionCover.get(species.id) || "";
+      return photo ? { ...species, fallbackCover: photo } : species;
+    });
   }
 
   private async getSubmission(id: string): Promise<SubmissionRecord | null> {

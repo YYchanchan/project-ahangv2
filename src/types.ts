@@ -96,9 +96,11 @@ export interface SpeciesImageCredit {
 export interface Species {
   id: string; // e.g. "african-lion"
   aliases?: string[];
-  /** Optional uploaded or external cover. Empty means the client may use its placeholder. */
+  /** Optional uploaded or external cover. Empty means the page may borrow an existing photo. */
   coverImage?: string;
   imageCredit?: SpeciesImageCredit;
+  /** Read-only display hint. Not stored. */
+  fallbackCover?: string;
   biologicalProfile: BiologicalProfile;
   basicInfo: BasicInfo;
   characteristics: SpeciesCharacteristic[];

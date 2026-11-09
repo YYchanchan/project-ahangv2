@@ -391,7 +391,7 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
     </view>
 
     <view v-if="species" class="detail-section species-section">
-      <SpeciesProfileView :species="species" :anchor-name="animal.name" @notify="emit('notify', $event)" />
+      <SpeciesProfileView :species="species" :animals="animals" :anchor-name="animal.name" @notify="emit('notify', $event)" />
     </view>
   </view>
 </template>

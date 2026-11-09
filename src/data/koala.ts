@@ -9,11 +9,6 @@ import type { Species } from "../types";
 export const KOALA: Species = {
   id: "koala",
   aliases: ["树袋熊", "koala"],
-  imageCredit: {
-    author: "阿杭计划",
-    license: "原创示意插画，不是野外或园内实拍",
-    sourceUrl: "",
-  },
   biologicalProfile: {
     chineseName: "考拉",
     englishName: "Koala",
