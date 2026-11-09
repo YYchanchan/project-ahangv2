@@ -11,6 +11,7 @@ import redPanda from "../assets/species-placeholders/red-panda.svg";
 import pallasCat from "../assets/species-placeholders/pallas-cat.svg";
 import chinesePangolin from "../assets/species-placeholders/pangolin.svg";
 import puma from "../assets/species-placeholders/puma.svg";
+import koala from "../assets/species-placeholders/koala.svg";
 import { resolveStandardSpeciesName, type SpeciesImageKey } from "./speciesImageCatalog";
 
 export { resolveStandardSpeciesName } from "./speciesImageCatalog";
@@ -30,6 +31,7 @@ const SPECIES_DEFAULT_IMAGES: Record<SpeciesImageKey, string> = {
   "Pallas's Cat": pallasCat,
   "Chinese Pangolin": chinesePangolin,
   "Puma": puma,
+  "Koala": koala,
 };
 
 /**

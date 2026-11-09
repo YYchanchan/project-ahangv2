@@ -6,6 +6,7 @@ import mysql, {
   type RowDataPacket,
 } from "mysql2/promise";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import { KOALA } from "../src/data/koala";
 import { applySpeciesContentPatch, PUMA } from "../src/data/speciesContentPatches";
 import { applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
 import {
@@ -306,7 +307,10 @@ export class MysqlStore implements Store {
     await this.ensureAdmin();
     await this.ensurePresetSpecies();
     await this.upsertSpecies(PUMA, true);
+    await this.upsertSpecies(KOALA, true);
     await this.ensureSpeciesAlias("african-lion", "白狮");
+    await this.ensureSpeciesAlias("koala", "树袋熊");
+    await this.ensureSpeciesAlias("koala", "koala");
     await this.fillBlankSpeciesContent();
     await this.linkUnlinkedAnimals();
   }

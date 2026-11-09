@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { EDITOR_WECHAT_ID, EDITOR_WECHAT_LABEL } from "../src/data/contact";
 import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
+import { KOALA } from "../src/data/koala";
+import { speciesCreditLine } from "../src/data/speciesImageCredit";
+import { SPECIES_RECRUIT_SUBTITLE, SPECIES_RECRUIT_TITLE } from "../src/data/speciesRecruitment";
 import { speciesScienceRejection } from "../src/data/speciesSubmissionGuard";
 import {
   applySpeciesContentPatch,
@@ -326,6 +329,31 @@ assert.equal(speciesScienceRejection({
   type: "correction",
   payload: { field: "name", evidence: "园方名牌" },
 }), null);
+assert.ok(speciesScienceRejection({
+  type: "recommend",
+  payload: { imageCredit: { author: "访客", license: "随便写" }, coverImage: "https://example.test/koala.jpg" },
+}));
+assert.equal(speciesScienceRejection({
+  type: "recommend",
+  payload: { animal: { name: "圆圆", speciesCode: "koala", species: "Koala" } },
+}), null);
+
+const koalaCatalog = [...catalog, KOALA];
+assert.equal(resolveSpecies(koalaCatalog, { species: "考拉" })?.id, "koala");
+assert.equal(resolveSpecies(koalaCatalog, { species: "树袋熊" })?.id, "koala");
+assert.equal(resolveSpecies(koalaCatalog, { commonName: "koala" })?.id, "koala");
+assert.equal(animalWithSharedSpeciesLink(animal({
+  id: "yuanyuan",
+  name: "圆圆",
+  species: "树袋熊",
+  description: "圆圆自己的故事",
+}), koalaCatalog)?.speciesCode, "koala");
+assert.equal(KOALA.basicInfo.diet.includes("桉"), true);
+assert.equal(KOALA.basicInfo.citesStatus.includes("未列入"), true);
+assert.equal(speciesCreditLine(KOALA.imageCredit), "阿杭计划 · 原创示意插画，不是野外或园内实拍");
+assert.equal(SPECIES_RECRUIT_TITLE, "寻找第一位成员");
+assert.equal(SPECIES_RECRUIT_SUBTITLE, "你在哪里见过它？告诉我们");
+assert.equal(resolveStandardSpeciesName("树袋熊"), "Koala");
 
 const corrected = applyCorrectionToAnimal(dundun, "出生年份应为2016年", "age");
 assert.equal(corrected.timeline.length, 1);

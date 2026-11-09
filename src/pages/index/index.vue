@@ -12,6 +12,7 @@ import SpeciesSelect from "../../components/SpeciesSelect.vue";
 import StatusBadge from "../../components/StatusBadge.vue";
 import UiImageIcon from "../../components/UiImageIcon.vue";
 import { missingIndividualFields } from "../../data/individualSupplement";
+import { SPECIES_RECRUIT_SUBTITLE, SPECIES_RECRUIT_TITLE } from "../../data/speciesRecruitment";
 import {
   isUncertainSpeciesCode,
   resolveSpecies,
@@ -146,6 +147,7 @@ const profileStats = ref<ProfileStats>({
   favoriteCount: 0,
 });
 
+const recommendLockedSpeciesId = ref("");
 const recommendForm = reactive({
   province: "广东省",
   zoo: "广州动物园",
@@ -613,11 +615,26 @@ function openCorrection(animalId = animals.value[0]?.id || "", returnToDetail = 
   openView("form_correction");
 }
 
-function startRecommend() {
-  if (!ensureLoggedIn(startRecommend)) return;
+function startRecommend(speciesId = "") {
+  const lockedId = typeof speciesId === "string" ? speciesId : "";
+  if (!ensureLoggedIn(() => startRecommend(lockedId))) return;
+  recommendLockedSpeciesId.value = lockedId;
+  if (lockedId) {
+    recommendForm.speciesCode = lockedId;
+    recommendForm.dontKnowName = false;
+  }
   recommendStep.value = 1;
   recommendSubmitted.value = false;
   openView("recommend_animal");
+}
+
+function leaveRecommend() {
+  const speciesId = recommendLockedSpeciesId.value;
+  if (speciesId) {
+    openSpecies(speciesId);
+    return;
+  }
+  goMain("record");
 }
 
 function startTask() {
@@ -645,6 +662,7 @@ function openTaskContribution(task: TaskChallenge) {
 }
 
 function toggleDontKnowSpecies() {
+  if (recommendLockedSpeciesId.value) return;
   recommendForm.dontKnowName = !recommendForm.dontKnowName;
   if (recommendForm.dontKnowName) recommendForm.speciesCode = UNCERTAIN_SPECIES_CODE;
 }
@@ -1814,7 +1832,7 @@ const observationBehaviors = [
             </button>
 
             <view class="action-grid">
-              <button class="action-card" @click="startRecommend">
+              <button class="action-card" @click="startRecommend()">
                 <view class="action-card__icon"><AhangIcon name="plus" :size="22" /></view>
                 <view>
                   <text class="action-card__title">推荐一只动物</text>
@@ -1946,7 +1964,8 @@ const observationBehaviors = [
                 <view class="animal-list-card__body">
                   <view class="animal-list-card__top">
                     <text class="animal-list-card__name">{{ species.biologicalProfile.chineseName }}</text>
-                    <text class="soft-tag">{{ species.basicInfo.iucnStatus || "物种" }}</text>
+                    <text v-if="speciesAnimalCount(species.id) === 0" class="recruit-badge">{{ SPECIES_RECRUIT_TITLE }}</text>
+                    <text v-else class="soft-tag">{{ species.basicInfo.iucnStatus || "物种" }}</text>
                   </view>
                   <text class="animal-list-card__summary">{{ species.biologicalProfile.englishName }} · {{ species.biologicalProfile.latinName }}</text>
                   <text class="animal-list-card__summary">已关联个体 {{ speciesAnimalCount(species.id) }} 只</text>
@@ -1991,7 +2010,7 @@ const observationBehaviors = [
               <text class="empty-state__icon">⌕</text>
               <text class="empty-state__title">没有找到匹配档案</text>
               <text class="empty-state__copy">可以清除关键字或切换分类，也可以推荐一只新动物。</text>
-              <button class="button button--red button--small" @click="startRecommend">推荐新动物</button>
+              <button class="button button--red button--small" @click="startRecommend()">推荐新动物</button>
             </view>
           </view>
 
@@ -2067,6 +2086,14 @@ const observationBehaviors = [
               </view>
               <view />
             </view>
+            <button
+              v-if="selectedSpeciesAnimals.length === 0"
+              class="recruit-banner"
+              @click="startRecommend(selectedSpeciesRecord.id)"
+            >
+              <text class="recruit-banner__title">{{ SPECIES_RECRUIT_TITLE }}</text>
+              <text class="recruit-banner__copy">{{ SPECIES_RECRUIT_SUBTITLE }}</text>
+            </button>
             <view class="detail-section species-page-card">
               <SpeciesProfileView :species="selectedSpeciesRecord" @notify="protectedNotify" />
             </view>
@@ -2089,14 +2116,14 @@ const observationBehaviors = [
               <view v-else class="empty-state empty-state--small">
                 <text>还没有关联到这个物种的个体</text>
                 <text>推荐建档时从物种库选中它，审核通过后就会出现在这里。</text>
-                <button class="button button--green button--small" @click="startRecommend">推荐一只个体</button>
+                <button class="button button--green button--small" @click="startRecommend(selectedSpeciesRecord.id)">推荐一只个体</button>
               </view>
             </view>
           </view>
 
           <view v-else-if="viewType === 'recommend_animal'" class="page page--form">
             <view class="nested-header">
-              <button @click="recommendSubmitted ? goMain('archives') : recommendStep > 1 ? recommendStep-- : goMain('record')"><UiImageIcon name="back" :size="24" tone="dark" /></button>
+              <button @click="recommendSubmitted ? goMain('archives') : recommendStep > 1 ? recommendStep-- : leaveRecommend()"><UiImageIcon name="back" :size="24" tone="dark" /></button>
               <view><text>推荐新动物建档</text><text v-if="!recommendSubmitted">步骤 {{ recommendStep }} / 4</text></view>
               <button class="header-close" @click="goMain('record')">×</button>
             </view>
@@ -2111,7 +2138,7 @@ const observationBehaviors = [
                 <view><text>推荐缘由</text><text>{{ recommendForm.reasons.join("、") }}</text></view>
               </view>
               <button class="button button--green" @click="goMain('archives')">查看候选动物档案</button>
-              <button class="outline-button outline-button--full" @click="startRecommend">继续推荐另一只动物</button>
+              <button class="outline-button outline-button--full" @click="startRecommend()">继续推荐另一只动物</button>
             </view>
             <view v-else class="step-progress">
               <view v-for="step in 4" :key="step" :class="{ active: recommendStep >= step }" />
@@ -2132,16 +2159,20 @@ const observationBehaviors = [
             <view v-else-if="!recommendSubmitted && recommendStep === 2" class="form-section">
               <text class="form-title">第二步：它是谁？</text>
               <text class="form-intro">如果知道它的名字、物种等信息请尽量提供，如完全不了解，也可以一键标记为不知道。</text>
-              <button class="checkbox-row" @click="toggleDontKnowSpecies">
+              <button v-if="!recommendLockedSpeciesId" class="checkbox-row" @click="toggleDontKnowSpecies">
                 <view :class="{ checked: recommendForm.dontKnowName }">{{ recommendForm.dontKnowName ? "✓" : "" }}</view>
                 <view class="checkbox-copy"><text>我不知道它是哪种动物，也没有任何名字线索</text><text>勾选后物种记为“不确定 / 待核实”，由审核人员以后补上</text></view>
               </button>
+              <view v-else class="duplicate-hint">
+                <text>只为这个物种建立个体档案</text>
+                <text>物种已经选定，这里不能改物种科普。填写的是你见过的那一只。</text>
+              </view>
               <label class="field"><text>它的名字 / 称呼</text><input v-model="recommendForm.name" :disabled="recommendForm.dontKnowName" placeholder="如：迪迪、老大、大耳朵（若无固定称呼可不填）" /></label>
               <label class="field"><text>它的昵称 / 别名</text><input v-model="recommendForm.nickname" :disabled="recommendForm.dontKnowName" placeholder="如：齐刘海熊、偏分帅哥、广州一哥" /></label>
               <view class="field">
                 <text>物种 {{ recommendForm.dontKnowName ? "" : "*" }}</text>
                 <text class="field-hint">从在线物种库选择。科学内容由物种页统一维护，这里只关联到某一物种。</text>
-                <SpeciesSelect v-model="recommendForm.speciesCode" :species="speciesItems" :disabled="recommendForm.dontKnowName" />
+                <SpeciesSelect v-model="recommendForm.speciesCode" :species="speciesItems" :disabled="recommendForm.dontKnowName || Boolean(recommendLockedSpeciesId)" />
               </view>
               <view class="field">
                 <text>性别</text>
@@ -6407,6 +6438,42 @@ const observationBehaviors = [
   .modal-backdrop {
     position: fixed;
   }
+}
+
+.recruit-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 16px;
+  background: #2f5233;
+  text-align: left;
+}
+
+.recruit-banner__title {
+  color: #f7f3ea;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.recruit-banner__copy {
+  color: #e4ecdf;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.recruit-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #2f5233;
+  color: #f7f3ea;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
 }
 
 @media (max-width: 350px) {

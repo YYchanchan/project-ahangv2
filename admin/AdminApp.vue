@@ -626,6 +626,8 @@ function emptySpecies(): Species {
     faqs: [],
     extendedReading: { congeneric: [], confamilial: [], articles: [], courses: [], videos: [], creativeProducts: [] },
     wildVsZoo: [],
+    coverImage: "",
+    imageCredit: { author: "", license: "", sourceUrl: "" },
   };
 }
 
@@ -713,6 +715,7 @@ function beginEditSpecies(item: Species) {
   editingSpecies.value = clone(item);
   if (!editingSpecies.value.wildVsZoo) editingSpecies.value.wildVsZoo = [];
   if (!editingSpecies.value.aliases) editingSpecies.value.aliases = [];
+  if (!editingSpecies.value.imageCredit) editingSpecies.value.imageCredit = { author: "", license: "", sourceUrl: "" };
   if (!editingSpecies.value.basicInfo.wildLifespan) editingSpecies.value.basicInfo.wildLifespan = "";
 }
 

@@ -37,6 +37,7 @@ const EXTRA_ALIASES: Record<string, string[]> = {
   "giant-panda": ["熊猫"],
   "chinese-pangolin": ["穿山甲", "中国穿山甲", "鲮鲤"],
   puma: ["山狮"],
+  koala: ["树袋熊", "koala"],
 };
 
 export function speciesOptionLabel(species: Species): string {

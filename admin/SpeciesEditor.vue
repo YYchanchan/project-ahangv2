@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import type { Species } from "../src/types";
 
 const props = defineProps<{
@@ -20,6 +20,7 @@ const readingText = ref({
 watch(
   () => props.species,
   (species) => {
+    if (!species.imageCredit) species.imageCredit = { author: "", license: "", sourceUrl: "" };
     aliasText.value = (species.aliases || []).join("\n");
     const reading = species.extendedReading;
     readingText.value = {
@@ -33,6 +34,11 @@ watch(
   },
   { immediate: true },
 );
+
+const imageCredit = computed(() => {
+  if (!props.species.imageCredit) props.species.imageCredit = { author: "", license: "", sourceUrl: "" };
+  return props.species.imageCredit;
+});
 
 function commitLists() {
   props.species.aliases = lines(aliasText.value);
@@ -94,6 +100,10 @@ defineExpose({ commitLists });
       <label><span>繁殖</span><input v-model="species.basicInfo.reproduction" /></label>
       <label class="full"><span>分布</span><textarea v-model="species.basicInfo.distribution" rows="3"></textarea></label>
       <label class="full"><span>栖息环境</span><textarea v-model="species.basicInfo.habitat" rows="3"></textarea></label>
+      <label class="full"><span>封面图片地址</span><input v-model="species.coverImage" placeholder="可留空。填写后物种页用这张图，并在图下显示署名" /></label>
+      <label><span>图片作者</span><input v-model="imageCredit.author" placeholder="如：拍摄者或插画作者" /></label>
+      <label><span>图片许可</span><input v-model="imageCredit.license" placeholder="如：CC BY 4.0，或原创示意插画" /></label>
+      <label class="full"><span>图片来源链接</span><input v-model="imageCredit.sourceUrl" placeholder="https://" /></label>
     </div>
 
     <section class="editor-block">

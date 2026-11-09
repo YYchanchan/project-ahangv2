@@ -20,6 +20,8 @@ const SCIENCE_KEYS = new Set([
   "classname",
   "genus",
   "latinname",
+  "imagecredit",
+  "coverimage",
 ]);
 
 const SUPPLEMENT_SPECIES_KEYS = new Set([

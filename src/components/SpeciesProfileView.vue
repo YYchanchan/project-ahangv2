@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { EDITOR_WECHAT_ID, EDITOR_WECHAT_LABEL } from "../data/contact";
+import { speciesCreditLine, speciesCreditSource } from "../data/speciesImageCredit";
+import { getSpeciesDefaultImage } from "../data/speciesImages";
 import type { Species } from "../types";
 
 const props = defineProps<{
@@ -21,6 +23,14 @@ function copyEditorWechat() {
 }
 
 const profile = computed(() => props.species.biologicalProfile);
+const creditText = computed(() => speciesCreditLine(props.species.imageCredit));
+const creditSource = computed(() => speciesCreditSource(props.species.imageCredit));
+const coverSrc = computed(() => {
+  const uploaded = props.species.coverImage?.trim();
+  if (uploaded) return uploaded;
+  if (!creditText.value && !creditSource.value) return "";
+  return getSpeciesDefaultImage(profile.value.englishName || profile.value.chineseName);
+});
 
 const speciesBasicInfo = computed(() => {
   const info = props.species.basicInfo;
@@ -81,6 +91,13 @@ const readingGroups = computed(() => {
 
 <template>
   <view class="species-profile">
+    <view v-if="coverSrc" class="species-cover">
+      <image :src="coverSrc" mode="aspectFill" :alt="profile.chineseName" />
+      <view v-if="creditText || creditSource" class="species-cover__credit">
+        <text v-if="creditText">{{ creditText }}</text>
+        <text v-if="creditSource">{{ creditSource }}</text>
+      </view>
+    </view>
     <view class="species-heading">
       <text>🔬</text>
       <view>
@@ -190,6 +207,32 @@ button::after {
 .species-profile {
   display: flex;
   flex-direction: column;
+}
+
+.species-cover {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.species-cover image {
+  width: 100%;
+  height: 180px;
+  border-radius: 16px;
+  background: #f4f1ea;
+}
+
+.species-cover__credit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.species-cover__credit text {
+  color: #78716c;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .species-contact {

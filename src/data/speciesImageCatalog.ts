@@ -17,6 +17,7 @@ export const SPECIES_DEFAULT_IMAGE_KEYS = [
   "Pallas's Cat",
   "Chinese Pangolin",
   "Puma",
+  "Koala",
 ] as const;
 
 export type SpeciesImageKey = (typeof SPECIES_DEFAULT_IMAGE_KEYS)[number];
@@ -39,6 +40,7 @@ export const SPECIES_CODE_TO_NAME: Record<string, SpeciesImageKey> = {
   "pallas-cat": "Pallas's Cat",
   "chinese-pangolin": "Chinese Pangolin",
   puma: "Puma",
+  koala: "Koala",
 };
 
 export const CHINESE_SPECIES_TO_NAME: Record<string, SpeciesImageKey> = {
@@ -66,6 +68,8 @@ export const CHINESE_SPECIES_TO_NAME: Record<string, SpeciesImageKey> = {
   "中国穿山甲": "Chinese Pangolin",
   "美洲狮": "Puma",
   "山狮": "Puma",
+  "考拉": "Koala",
+  "树袋熊": "Koala",
 };
 
 export function resolveStandardSpeciesName(speciesInput: string | undefined | null): string {
