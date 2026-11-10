@@ -19,6 +19,14 @@ export interface AnimalTimelineEvent {
   description: string;
 }
 
+export interface AnimalSupplement {
+  sourceSubmissionId: string;
+  field: string;
+  text: string;
+  source: string;
+  approvedAt: string;
+}
+
 export interface ObservationRecord {
   id: string;
   sourceSubmissionId?: string;
@@ -155,6 +163,7 @@ export interface Animal {
   tags: string[];
   description: string;
   timeline: AnimalTimelineEvent[];
+  supplements?: AnimalSupplement[];
   observations: ObservationRecord[];
   verified: boolean;
   verifiedCount: number;

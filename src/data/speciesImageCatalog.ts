@@ -45,6 +45,7 @@ export const SPECIES_CODE_TO_NAME: Record<string, SpeciesImageKey> = {
 
 export const CHINESE_SPECIES_TO_NAME: Record<string, SpeciesImageKey> = {
   "非洲狮": "African Lion",
+  "白狮": "African Lion",
   "狮": "African Lion",
   "狮子": "African Lion",
   "亚洲象": "Asian Elephant",

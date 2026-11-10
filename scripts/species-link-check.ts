@@ -12,7 +12,7 @@ import {
   ASIAN_ELEPHANT_DIET_WITH_PREDATION,
   PUMA,
 } from "../src/data/speciesContentPatches";
-import { applyCorrectionToAnimal, mergeIndividualSupplement, missingIndividualFields } from "../src/data/individualSupplement";
+import { appendApprovedSupplement, applyCorrectionToAnimal, mergeIndividualSupplement, missingIndividualFields } from "../src/data/individualSupplement";
 import { resolveStandardSpeciesName } from "../src/data/speciesImageCatalog";
 import {
   animalWithSharedSpeciesLink,
@@ -330,6 +330,10 @@ assert.equal(speciesScienceRejection({
   type: "correction",
   payload: { field: "name", evidence: "园方名牌" },
 }), null);
+assert.equal(speciesScienceRejection({
+  type: "correction",
+  payload: { field: "species_link", speciesId: "african-lion", referenceAnimalId: "reference-qa" },
+}), null);
 assert.ok(speciesScienceRejection({
   type: "recommend",
   payload: { imageCredit: { author: "访客", license: "随便写" }, coverImage: "https://example.test/koala.jpg" },
@@ -388,11 +392,31 @@ assert.equal(withoutPlaceholderIllustrationCredit({
 assert.equal(SPECIES_RECRUIT_TITLE, "寻找第一位成员");
 assert.equal(SPECIES_RECRUIT_SUBTITLE, "你在哪里见过它？告诉我们");
 assert.equal(resolveStandardSpeciesName("树袋熊"), "Koala");
+assert.equal(resolveStandardSpeciesName("白狮"), "African Lion");
 
 const corrected = applyCorrectionToAnimal(dundun, "出生年份应为2016年", "age");
 assert.equal(corrected.timeline.length, 1);
 assert.equal(corrected.timeline[0].title, "生卒资料补充");
 assert.equal(corrected.description, dundun.description);
 assert.equal(applyCorrectionToAnimal(corrected, "出生年份应为2016年", "age").timeline.length, 1);
+const withSupplement = appendApprovedSupplement(dundun, {
+  sourceSubmissionId: "sub-link-1",
+  field: "species_link",
+  text: "建议将墩墩关联至非洲狮",
+  source: "参考个体",
+  approvedAt: "2026-11-10T00:00:00.000Z",
+});
+assert.equal(withSupplement.supplements?.length, 1);
+assert.equal(withSupplement.description, dundun.description);
+assert.equal(
+  appendApprovedSupplement(withSupplement, {
+    sourceSubmissionId: "sub-link-1",
+    field: "species_link",
+    text: "重复审核应覆盖同条补充",
+    source: "参考个体",
+    approvedAt: "2026-11-10T01:00:00.000Z",
+  }).supplements?.map((item) => item.text).join(),
+  "重复审核应覆盖同条补充",
+);
 
 console.log("species link checks passed");

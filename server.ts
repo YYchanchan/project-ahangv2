@@ -398,13 +398,40 @@ export function buildApp(store: Store) {
         return res.status(400).json({ error: "补充资料需要关联一只个体或一条待补充投稿" });
       }
     }
+    let animalId = body.animalId;
+    let animalName = body.animalName;
+    let payload = body.payload || {};
+    if (body.type === "correction") {
+      const targetId = typeof animalId === "string" ? animalId.trim() : "";
+      const target = targetId ? await store.getAnimal(targetId) : null;
+      if (!target) {
+        return res.status(400).json({ error: "请选择已有的公开动物档案" });
+      }
+      animalId = target.id;
+      animalName = target.name;
+      if (payload.field === "species_link") {
+        const speciesId = typeof payload.speciesId === "string" ? payload.speciesId.trim() : "";
+        const species = speciesId ? await store.getSpecies(speciesId) : null;
+        if (!species) {
+          return res.status(400).json({ error: "请选择已有的公开物种资料" });
+        }
+        const referenceId = typeof payload.referenceAnimalId === "string" ? payload.referenceAnimalId.trim() : "";
+        const reference = referenceId ? await store.getAnimal(referenceId) : null;
+        if (referenceId) {
+          if (!reference || reference.id === target.id || reference.speciesCode !== species.id) {
+            return res.status(400).json({ error: "参考个体与所选物种不一致" });
+          }
+        }
+        payload = { ...payload, speciesId: species.id, referenceAnimalId: reference?.id };
+      }
+    }
     const submission = await store.createSubmission(req.currentUser!, {
       type: body.type,
-      animalId: body.animalId,
-      animalName: body.animalName,
+      animalId,
+      animalName,
       title: body.title.trim(),
       details: body.details.trim(),
-      payload: body.payload || {},
+      payload,
       mediaUrl: body.mediaUrl,
       source: body.source,
       copyright: body.copyright,

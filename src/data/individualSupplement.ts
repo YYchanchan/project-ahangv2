@@ -1,4 +1,4 @@
-import type { Animal, AnimalTimelineEvent } from "../types";
+import type { Animal, AnimalSupplement, AnimalTimelineEvent } from "../types";
 import { UNCERTAIN_SPECIES_CODE } from "./speciesResolver";
 
 export interface IndividualSupplementInput {
@@ -170,4 +170,12 @@ export function readSupplementInput(payload: Record<string, unknown> | undefined
 
 function filled(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+export function appendApprovedSupplement(animal: Animal, supplement: AnimalSupplement): Animal {
+  const supplements = [...(animal.supplements || [])];
+  const existingIndex = supplements.findIndex((item) => item.sourceSubmissionId === supplement.sourceSubmissionId);
+  if (existingIndex >= 0) supplements.splice(existingIndex, 1, supplement);
+  else supplements.unshift(supplement);
+  return { ...animal, supplements };
 }

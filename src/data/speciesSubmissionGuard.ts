@@ -33,7 +33,7 @@ const SUPPLEMENT_SPECIES_KEYS = new Set([
   "englishname",
 ]);
 
-const INDIVIDUAL_CORRECTION_FIELDS = new Set(["gender", "age", "timeline", "name", "institution"]);
+const INDIVIDUAL_CORRECTION_FIELDS = new Set(["gender", "age", "timeline", "name", "institution", "species_link"]);
 
 export const SPECIES_SCIENCE_REJECTION =
   "物种科普由编辑维护，访客不能修改或投稿物种内容。如发现错误，请使用「联系我们」。";

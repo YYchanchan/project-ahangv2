@@ -232,6 +232,14 @@ function memoryAnimalNames(memory: PublicMemoryRecord): string {
       <button @click="emit('supplement', animal.id)">补充资料</button>
     </view>
 
+    <view v-if="animal.supplements?.length" class="detail-section">
+      <view class="section-title"><text>📎</text><text>已核验的补充资料</text></view>
+      <view v-for="item in animal.supplements" :key="item.sourceSubmissionId" class="supplement-note">
+        <text>{{ item.text }}</text>
+        <text>{{ item.source || '已通过人工审核' }}</text>
+      </view>
+    </view>
+
     <view class="tag-row">
       <text v-for="tag in animal.tags" :key="tag">#{{ tag }}</text>
     </view>
@@ -1512,6 +1520,27 @@ button::after {
   font-size: 12px;
   font-weight: 700;
 }
+
+.supplement-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 0;
+  border-bottom: 1px solid #f0ece7;
+}
+
+.supplement-note text:first-child {
+  color: #44403c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.supplement-note text:last-child {
+  color: #8c867d;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
 
 .peer-list {
   display: flex;

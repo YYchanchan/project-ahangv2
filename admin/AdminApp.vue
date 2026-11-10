@@ -126,6 +126,9 @@ const payloadLabels: Record<string, string> = {
   date: "资料日期",
   field: "纠错字段",
   evidence: "纠错依据",
+  speciesId: "拟关联物种",
+  referenceAnimalId: "参考已有个体",
+  text: "拟公开的补充内容",
   expectedInfo: "希望获得的资料",
   rewardLabel: "协作奖励说明",
   taskId: "协作任务 ID",
@@ -135,15 +138,27 @@ const payloadLabels: Record<string, string> = {
   missingAtSubmit: "提交时缺少的字段",
 };
 
+function formatPayloadValue(key: string, value: unknown): string {
+  if (typeof value === "string") {
+    if (key === "field" && value === "species_link") return "关联已有物种资料";
+    if (key === "speciesId") {
+      const profile = species.value.find((item) => item.id === value)?.biologicalProfile;
+      if (profile) return `${profile.chineseName} · ${profile.latinName}（${value}）`;
+    }
+    if (key === "referenceAnimalId") {
+      const animal = animals.value.find((item) => item.id === value);
+      if (animal) return `${animal.name} · ${animal.species} · ${animal.gender}（${value}）`;
+    }
+    return value;
+  }
+  return Array.isArray(value) ? value.join("、") : JSON.stringify(value, null, 2);
+}
+
 function toPayloadEntries(payload: Record<string, unknown> = {}) {
   return Object.entries(payload).map(([key, value]) => ({
-  key,
-  label: payloadLabels[key] || key,
-  value: typeof value === "string"
-    ? value
-    : Array.isArray(value)
-      ? value.join("、")
-      : JSON.stringify(value, null, 2),
+    key,
+    label: payloadLabels[key] || key,
+    value: formatPayloadValue(key, value),
   }));
 }
 
@@ -1046,7 +1061,7 @@ onMounted(async () => {
       <section class="modal-card modal-card-wide" @click.stop>
         <header><div><h2>动物档案</h2><p>新增或编辑后直接写入 MySQL</p></div><button aria-label="关闭" @click="editingAnimal = null"><AdminIcon name="close" :size="18" /></button></header>
         <div class="form-grid">
-          <label><span>唯一 ID</span><input v-model="editingAnimal.id" /></label><label><span>名字</span><input v-model="editingAnimal.name" /></label><label><span>昵称</span><input v-model="editingAnimal.nickname" /></label><label><span>机构</span><input v-model="editingAnimal.institution" /></label><label><span>城市</span><input v-model="editingAnimal.city" /></label><label><span>状态说明</span><input v-model="editingAnimal.statusLabel" /></label><label><span>图片 URL</span><input v-model="editingAnimal.image" /></label>
+          <label><span>唯一 ID</span><input v-model="editingAnimal.id" /></label><label><span>名字</span><input v-model="editingAnimal.name" /></label><label><span>昵称</span><input v-model="editingAnimal.nickname" /></label><label><span>性别</span><select v-model="editingAnimal.gender"><option>未知</option><option>雄性</option><option>雌性</option></select></label><label><span>机构</span><input v-model="editingAnimal.institution" /></label><label><span>城市</span><input v-model="editingAnimal.city" /></label><label><span>状态说明</span><input v-model="editingAnimal.statusLabel" /></label><label><span>图片 URL</span><input v-model="editingAnimal.image" /></label>
           <label class="full"><span>物种（从已有物种库选择）</span><input v-model="animalSpeciesQuery" placeholder="搜索中文名、英文名或拉丁名" /><select v-model="editingAnimal.speciesCode" @change="applyAdminSpeciesLink"><option :value="UNCERTAIN_SPECIES_CODE">不确定 / 待核实</option><option v-for="item in animalSpeciesOptions" :key="item.id" :value="item.id">{{ item.biologicalProfile.chineseName }} · {{ item.biologicalProfile.englishName }} · {{ item.biologicalProfile.latinName }}</option></select><small>当前：{{ editingAnimal.commonName || "未选择" }} / {{ editingAnimal.species || "—" }} / {{ editingAnimal.scientificName || "—" }}（编号 {{ editingAnimal.speciesCode || "空" }}）。新物种请先在「物种知识」里创建，科普不会写进这只个体。</small></label>
           <div class="image-editor full">
             <img v-if="editingAnimal.image" :src="resolveAdminMediaUrl(editingAnimal.image)" alt="动物图片预览" />

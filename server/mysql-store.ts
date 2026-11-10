@@ -9,7 +9,7 @@ import { CHINESE_PANGOLIN } from "../src/data/chinesePangolin";
 import { KOALA } from "../src/data/koala";
 import { applySpeciesContentPatch, PUMA } from "../src/data/speciesContentPatches";
 import { isRealPhotoUrl, speciesPhotoCandidates, withoutPlaceholderIllustrationCredit } from "../src/data/speciesCover";
-import { applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
+import { appendApprovedSupplement, applyCorrectionToAnimal, mergeIndividualSupplement, readSupplementInput } from "../src/data/individualSupplement";
 import {
   animalWithSharedSpeciesLink,
   isUncertainSpeciesCode,
@@ -455,11 +455,27 @@ export class MysqlStore implements Store {
   }
 
   async deleteSpecies(id: string, operatorId: string): Promise<boolean> {
-    const [references] = await this.pool.query<RowDataPacket[]>("SELECT COUNT(*) count FROM animals WHERE species_code = ?", [id]);
-    if (Number(references[0].count)) throw new Error("该物种仍被动物档案引用，请先修改关联档案");
-    const [result] = await this.pool.execute<ResultSetHeader>("DELETE FROM species WHERE id = ?", [id]);
-    if (result.affectedRows) await this.addLog(operatorId, "删除物种知识", "species", id);
-    return result.affectedRows > 0;
+    const connection = await this.pool.getConnection();
+    let deleted: boolean;
+    try {
+      await connection.beginTransaction();
+      await connection.query("SELECT id FROM species WHERE id = ? FOR UPDATE", [id]);
+      const [references] = await connection.query<RowDataPacket[]>(
+        "SELECT id FROM animals WHERE species_code = ? LIMIT 1",
+        [id],
+      );
+      if (references.length) throw new Error("该物种仍被动物档案引用，请先修改关联档案");
+      const [result] = await connection.execute<ResultSetHeader>("DELETE FROM species WHERE id = ?", [id]);
+      deleted = result.affectedRows > 0;
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+    if (deleted) await this.addLog(operatorId, "删除物种知识", "species", id);
+    return deleted;
   }
 
   async listMemories(animalId?: string, userId?: string) {
@@ -1437,18 +1453,58 @@ export class MysqlStore implements Store {
       return;
     }
     if (row.type === "correction" && row.animal_id) {
-      const [animalRows] = await connection.query<RowDataPacket[]>(
-        "SELECT data_json FROM animals WHERE id = ? FOR UPDATE",
-        [row.animal_id],
-      );
-      if (animalRows[0]) {
-        const field = typeof payload.field === "string" ? payload.field : undefined;
-        const animal = applyCorrectionToAnimal(parseJson<Animal>(animalRows[0].data_json), String(row.details || ""), field);
-        await connection.execute(
-          "UPDATE animals SET data_json = ?, updated_at = NOW() WHERE id = ?",
-          [JSON.stringify(animal), row.animal_id],
+      const animalId = String(row.animal_id).trim();
+      let linkedSpecies: Species | undefined;
+      if (payload.field === "species_link") {
+        const speciesId = typeof payload.speciesId === "string" ? payload.speciesId.trim() : "";
+        if (!speciesId) throw new Error("未选择有效的物种资料");
+        // Hold the species record through approval so deletion cannot leave a new link dangling.
+        const [speciesRows] = await connection.query<RowDataPacket[]>(
+          "SELECT data_json FROM species WHERE id = ? AND published = 1 LIMIT 1 LOCK IN SHARE MODE",
+          [speciesId],
         );
+        if (!speciesRows[0]) throw new Error("所选物种资料不存在或尚未公开");
+        linkedSpecies = parseJson<Species>(speciesRows[0].data_json);
+
+        if (typeof payload.referenceAnimalId === "string" && payload.referenceAnimalId.trim()) {
+          const [referenceRows] = await connection.query<RowDataPacket[]>(
+            "SELECT id, species_code FROM animals WHERE id = ? AND published = 1 LIMIT 1",
+            [payload.referenceAnimalId.trim()],
+          );
+          const reference = referenceRows[0];
+          if (!reference || reference.id === animalId || reference.species_code !== linkedSpecies.id) {
+            throw new Error("参考个体的物种关联已变化，请重新核验投稿");
+          }
+        }
       }
+
+      const [animalRows] = await connection.query<RowDataPacket[]>(
+        "SELECT data_json FROM animals WHERE id = ? AND published = 1 FOR UPDATE",
+        [animalId],
+      );
+      if (!animalRows[0]) throw new Error("关联动物档案不存在，无法发布资料补充");
+      const field = typeof payload.field === "string" ? payload.field : undefined;
+      let animal = parseJson<Animal>(animalRows[0].data_json);
+      if (!linkedSpecies) {
+        animal = applyCorrectionToAnimal(animal, String(row.details || ""), field);
+      } else {
+        animal.speciesCode = linkedSpecies.id;
+        animal.speciesId = linkedSpecies.id;
+        animal.scientificName = linkedSpecies.biologicalProfile.latinName;
+        // Keep the animal's own species wording (e.g. 白狮) and individual facts.
+      }
+      const supplement = {
+        sourceSubmissionId: String(row.id),
+        field: String(payload.field || "other"),
+        text: typeof payload.text === "string" && payload.text.trim() ? payload.text.trim() : String(row.details),
+        source: String(row.source_text || ""),
+        approvedAt: new Date().toISOString(),
+      };
+      animal = appendApprovedSupplement(animal, supplement);
+      await connection.execute(
+        "UPDATE animals SET species_code = ?, species_name = ?, data_json = ?, updated_at = NOW() WHERE id = ?",
+        [animal.speciesCode || "", animal.species || "", JSON.stringify(animal), animalId],
+      );
       return;
     }
     if (row.type === "supplement") {
@@ -1458,6 +1514,21 @@ export class MysqlStore implements Store {
     if (row.type === "recommend" && payload.animal && typeof payload.animal === "object") {
       const animal = payload.animal as Animal;
       await this.applyResolvedSpecies(animal, await this.loadPublishedSpecies(connection));
+      if (previousRow || row.reviewed_at) {
+        const [existingRows] = await connection.query<RowDataPacket[]>(
+          "SELECT data_json FROM animals WHERE id = ? AND published = 1 FOR UPDATE",
+          [animal.id],
+        );
+        const published = existingRows[0] ? parseJson<Animal>(existingRows[0].data_json) : null;
+        if (published?.supplements?.length) {
+          animal.supplements = published.supplements;
+          if (published.supplements.some((item) => item.field === "species_link")) {
+            animal.speciesCode = published.speciesCode;
+            animal.speciesId = published.speciesId;
+            animal.scientificName = published.scientificName;
+          }
+        }
+      }
       payload.animal = animal;
       await connection.execute(
         `INSERT INTO animals

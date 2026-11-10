@@ -21,6 +21,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test:api": "tsx scripts/api-smoke.ts",
     "test:species": "tsx scripts/species-link-check.ts",
+    "test:species-link": "tsx scripts/species-link-smoke.ts",
     "test:approved-edit": "tsx scripts/approved-content-edit-smoke.ts",
     "test:logs": "tsx scripts/logging-smoke.ts",
     "lint": "npm run typecheck",
